@@ -537,7 +537,16 @@ impl Vorbis<'_> {
                 // for the n values from `left` on.)
                 let buffer = buffer.get_mut(left..).unwrap_or_default();
                 for ((value, &before), (&rising, &falling)) in buffer.iter_mut().zip(previous).zip(w.iter().zip(w.iter().rev())) {
-                    *value = *value * rising + before * falling;
+                    let (now, earlier) = (*value * rising, before * falling);
+                    // The sum of the two, said so that it doesn't depend on the compiler. A
+                    // broken file can make both of them not-a-number, and an addition then
+                    // gives whichever of the two the compiler happened to put first, which
+                    // shows in the sign of what comes out. It is the earlier frame's that
+                    // stb_vorbis built by gcc gives, so that one is taken outright (with a
+                    // mask and not a branch, to leave the loop several samples at a time).
+                    let sum = now + earlier;
+                    let earlier_is_nan = u32::from(earlier.is_nan()).wrapping_neg();
+                    *value = f32::from_bits((earlier.to_bits() & earlier_is_nan) | (sum.to_bits() & !earlier_is_nan));
                 }
             }
         }
