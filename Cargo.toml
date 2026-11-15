@@ -1,0 +1,14 @@
+[package]
+name = "rustb-vorbis"
+description = "Ogg Vorbis decoder: a function-for-function Rust port of Sean Barrett's stb_vorbis that gives the same samples, with no dependencies and no unsafe code."
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Unlicense"
+repository = "https://github.com/OctoKeights/rustb-vorbis"
+readme = "README.md"
+# The tests and their sounds stay in the repository, out of the published package.
+exclude = ["tests/"]
+keywords = ["vorbis", "ogg", "audio", "decoder", "stb"]
+categories = ["multimedia::audio", "multimedia::encoding"]
+
+[dependencies]
