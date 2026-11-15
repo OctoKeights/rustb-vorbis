@@ -109,7 +109,7 @@ fn decode_residue(f: &mut Io, codebooks: &[Codebook], r: &Residue, rtype: u16, b
         if do_not_decode[..ch as usize].iter().all(|&skip| skip) {
             return;
         }
-        for pass in 0..8 {
+        for pass in 0..r.passes {
             let mut pcount = 0i32;
             let mut class_set = 0usize;
             // (stb_vorbis has this loop twice, for ch == 2 and ch > 2: they differ in how a
@@ -152,7 +152,7 @@ fn decode_residue(f: &mut Io, codebooks: &[Codebook], r: &Residue, rtype: u16, b
         return;
     }
 
-    for pass in 0..8 {
+    for pass in 0..r.passes {
         let mut pcount = 0i32;
         let mut class_set = 0usize;
         while pcount < part_read {

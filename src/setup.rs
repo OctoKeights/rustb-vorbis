@@ -36,6 +36,10 @@ pub(crate) struct Residue {
     pub classbook: u8,
     pub classdata: Vec<Vec<u8>>,
     pub residue_books: Vec<[i16; 8]>,
+    /// How many of the eight passes there is anything to decode in: the last one that any
+    /// classification has a codebook for, and at least the first, which reads the
+    /// classifications. stb_vorbis goes through all eight, finding nothing to do in the rest.
+    pub passes: usize,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -248,7 +252,8 @@ fn read_residue(f: &mut Io, codebooks: &[Codebook]) -> Result<(u16, Residue), Vo
         }
         classdata.push(row);
     }
-    Ok((residue_type, Residue { begin, end, part_size, classifications, classbook, classdata, residue_books }))
+    let passes = (1..8).rev().find(|&pass| residue_books.iter().any(|books| books[pass] >= 0)).map_or(1, |last| last + 1);
+    Ok((residue_type, Residue { begin, end, part_size, classifications, classbook, classdata, residue_books, passes }))
 }
 
 fn read_mapping(f: &mut Io, channels: usize, floor_count: usize, residue_count: usize) -> Result<Mapping, VorbisError> {
