@@ -1,5 +1,8 @@
 # rustb-vorbis
 
+[![crates.io](https://img.shields.io/crates/v/rustb-vorbis.svg)](https://crates.io/crates/rustb-vorbis)
+[![docs.rs](https://docs.rs/rustb-vorbis/badge.svg)](https://docs.rs/rustb-vorbis)
+
 A pure-Rust Ogg Vorbis decoder, ported from Sean Barrett's
 [stb_vorbis](https://github.com/nothings/stb/blob/master/stb_vorbis.c) (version 1.22).
 
@@ -12,6 +15,8 @@ Rust, with nothing else to install.
 - **No dependencies.** The crate uses only the Rust standard library.
 - **No `unsafe` code.** The crate is built with `#![forbid(unsafe_code)]`, so a damaged or
   hostile file cannot make it read or write outside its buffers.
+- **Both of stb_vorbis's interfaces.** Decode a file you already have in memory, with seeking,
+  or feed the decoder a stream piece by piece as the bytes arrive.
 
 ## Contents
 
@@ -26,12 +31,15 @@ Rust, with nothing else to install.
 
 ## Getting started
 
-The crate is not on crates.io yet. Until it is, you can depend on this repository directly:
+The crate is on [crates.io](https://crates.io/crates/rustb-vorbis). Add it to your project
+with `cargo add rustb-vorbis`, or put it in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rustb-vorbis = { git = "https://github.com/OctoKeights/rustb-vorbis" }
+rustb-vorbis = "0.1"
 ```
+
+The API documentation is on [docs.rs](https://docs.rs/rustb-vorbis).
 
 To decode a whole file in one call:
 
@@ -72,13 +80,59 @@ Seeking works on sample positions:
 vorbis.seek(44_100)?; // the next sample read is sample 44,100
 ```
 
+### Decoding a stream as it arrives
+
+If the file is still arriving, for example over a network, `VorbisPush` (available from
+version 0.1.1) decodes it piece by piece. You hand it the bytes you have, it tells you how many it used, and you hand it the
+rest, plus whatever has arrived since, on the next call:
+
+```rust
+use rustb_vorbis::{VorbisError, VorbisPush};
+
+// `receive_more` stands for however your bytes arrive. Here it appends them to the buffer
+// and returns false once the stream has ended.
+let mut bytes: Vec<u8> = Vec::new(); // received, not yet used
+
+// The headers come first. Keep adding data until there is enough to read them.
+let mut vorbis = loop {
+    match VorbisPush::open(&bytes) {
+        Ok((vorbis, used)) => {
+            bytes.drain(..used);
+            break vorbis;
+        }
+        Err(VorbisError::NeedMoreData) if receive_more(&mut bytes) => {}
+        Err(error) => return Err(error.into()),
+    }
+};
+
+// Then the audio, one frame at a time.
+loop {
+    let step = vorbis.decode_frame(&bytes);
+    if step.bytes_used == 0 {
+        // Not enough for a frame yet.
+        if !receive_more(&mut bytes) {
+            break; // the end of the stream
+        }
+        continue;
+    }
+    bytes.drain(..step.bytes_used);
+    if step.samples > 0 {
+        let left: &[f32] = vorbis.frame(0);
+        // `step.samples` samples for each channel are ready to play
+    }
+}
+```
+
+If you jump to another place in the stream, or lose some data, call `vorbis.flush()`. The
+decoder then finds the next page it can decode from by itself.
+
 ## Is this the right decoder for you?
 
 Rust already has good Vorbis decoders written in Rust, notably
 [lewton](https://crates.io/crates/lewton) and
 [Symphonia](https://crates.io/crates/symphonia). If you would like a decoder that is part of a
-wider audio library, or one that can read from a stream as it arrives, one of those is
-probably the better choice.
+wider audio library, with other formats and containers alongside it, one of those is probably
+the better choice.
 
 rustb-vorbis is aimed at a narrower need:
 
@@ -92,9 +146,10 @@ the same audio.
 
 ## API overview
 
-The crate covers stb_vorbis's "pull" API for a file held in memory. Function names follow the
-originals with the `stb_vorbis_` prefix removed, so existing knowledge of the C library carries
-over.
+The crate covers both of stb_vorbis's APIs. Function names follow the originals with the
+`stb_vorbis_` prefix removed, so existing knowledge of the C library carries over.
+
+`Vorbis` is the "pull" API, for a file held in memory:
 
 | stb_vorbis | rustb-vorbis |
 | --- | --- |
@@ -109,6 +164,19 @@ over.
 | `stb_vorbis_seek`, `stb_vorbis_seek_frame`, `stb_vorbis_seek_start` | `seek`, `seek_frame`, `seek_start` |
 | `stb_vorbis_stream_length_in_samples`, `..._in_seconds` | `stream_length_in_samples`, `stream_length_in_seconds` |
 | `stb_vorbis_decode_memory` | `decode_memory` |
+
+`VorbisPush` is the "push" API, for a file that arrives in pieces:
+
+| stb_vorbis | rustb-vorbis |
+| --- | --- |
+| `stb_vorbis_open_pushdata` | `VorbisPush::open` |
+| `stb_vorbis_decode_frame_pushdata` | `decode_frame`, then `frame(channel)` |
+| `stb_vorbis_flush_pushdata` | `flush` |
+| `stb_vorbis_get_info`, `stb_vorbis_get_comment` | `info`, `vendor`, `comments` |
+| `stb_vorbis_get_error`, `stb_vorbis_get_sample_offset` | `take_error`, `sample_offset` |
+
+In C, the two APIs share one type and calling a pull function on a push decoder is an error
+at run time. Here they are separate types, so that mistake cannot be made.
 
 Errors are reported as a `VorbisError`, which carries the same numeric codes as stb_vorbis's
 `STBVorbisError` (available through `VorbisError::code`).
@@ -135,7 +203,7 @@ three slightly different things, the crate lets you choose:
 | stb_vorbis built as C by Microsoft's compiler | `Vorbis::open_with_pi(data, Pi::Float)` |
 | stb_vorbis built as C++ by Microsoft's compiler | `Vorbis::open_with_pi(data, Pi::FloatCpp)` |
 
-`decode_memory_with_pi` takes the same choice. One note on `Pi::FloatCpp`: the
+`decode_memory_with_pi` and `VorbisPush::open_with_pi` take the same choice. One note on `Pi::FloatCpp`: the
 single-precision cosine and sine come from the system's maths library, so it matches a C++
 build made on the same system it runs on.
 
@@ -146,7 +214,8 @@ one to use.
 
 For valid Vorbis files, the port and stb_vorbis agree exactly. For damaged files, the port
 follows stb_vorbis as far as stb_vorbis stays within its own memory, and in practice it almost
-always returns the same samples, positions and error codes. The known differences are:
+always returns the same samples, positions and error codes. The known differences, which
+apply to both APIs, are:
 
 - **Out-of-bounds access.** Where stb_vorbis would read or write past a buffer, the port stops
   or reads zeros.
@@ -173,9 +242,12 @@ always returns the same samples, positions and error codes. The known difference
 
 The repository includes a tool that checks the port against the C library directly.
 `compare/dump.c` runs stb_vorbis over a set of files and prints the results of every function
-in its pull API: each way of reading samples, down-mixing to one, two and three channels, ten
-seeks to a sample and ten to a frame, and the decoder's position and error state after each
-step. `examples/dump.rs` does the same with this crate, and `compare/compare.sh` builds both,
+in both of its APIs. For the pull API, that is each way of reading samples, down-mixing to
+one, two and three channels, ten seeks to a sample and ten to a frame, and the decoder's
+position and error state after each step. For the push API, the file is fed in pieces of
+several sizes, down to a single byte at a time for small files, and the decoder is then moved
+to four other places in the file to find its way again. `examples/dump.rs` does the same with
+this crate, and `compare/compare.sh` builds both,
 runs them over a folder of `.ogg` files and confirms that the output matches byte for byte:
 
 ```
@@ -188,12 +260,13 @@ These comparisons were run on Linux (x86-64) against stb_vorbis built with gcc.
 
 | Test set | Result |
 | --- | --- |
-| 23,622 sounds from three commercial games (S.T.A.L.K.E.R.: Shadow of Chernobyl, Clear Sky and Call of Pripyat; all mono) | Identical in the `double` and `float` builds: 968,502 lines of results each, with no differences. The same sounds also match in the `float-cpp` build, through Noolith's own comparison against its C++ code. |
-| 140 synthetic sounds encoded with ffmpeg (1 to 8 channels, 8 to 96 kHz, every libvorbis quality from -1 to 10, fixed bitrates, ffmpeg's native Vorbis encoder, silence, a sound shorter than one frame, and sounds long enough to exercise seeking) | Identical in all three builds. |
-| 3,600 randomly damaged copies of small sounds (changed bytes, truncated files, dropped or overwritten blocks) | 3,598 identical. stb_vorbis itself crashed on the other two. 2,213 of these files still open and decode. |
-| Every single-bit change to the comment and setup headers of four small sounds (146,664 files, of which 64,267 still open) | 146,462 identical. stb_vorbis crashed or hung on 50. The remaining 152 are the differences described above: 105 in comment bytes, 43 in the sign of NaN samples, 3 where stb_vorbis fails without an error code, and one error code that the port has since been changed to match. |
+| 23,622 sounds from three commercial games (S.T.A.L.K.E.R.: Shadow of Chernobyl, Clear Sky and Call of Pripyat; all mono) | Identical in the `double` build across both APIs: 1,618,356 lines of results, with no differences. The pull API was also compared in the `float` build (968,502 lines, no differences), and the same sounds match in the `float-cpp` build through Noolith's own comparison against its C++ code. |
+| 140 synthetic sounds encoded with ffmpeg (1 to 8 channels, 8 to 96 kHz, every libvorbis quality from -1 to 10, fixed bitrates, ffmpeg's native Vorbis encoder, silence, a sound shorter than one frame, and sounds long enough to exercise seeking) | Identical in all three builds, across both APIs. |
+| 3,600 randomly damaged copies of small sounds (changed bytes, truncated files, dropped or overwritten blocks) | 3,598 identical across both APIs. stb_vorbis itself crashed on the other two. 2,213 of these files still open and decode. |
+| Every single-bit change to the comment and setup headers of four small sounds (146,664 files, of which 64,267 still open) | 146,430 identical across both APIs. stb_vorbis crashed, hung or needed more than 20 seconds on 117. The remaining 117 are the differences described above: 71 in comment bytes, 43 in the sign of NaN samples, and 3 where stb_vorbis fails without an error code. |
 
-The port did not panic on any of these files.
+The port did not panic on any of these files, and none of the differences is specific to the
+push API.
 
 ### What has not been verified
 
@@ -217,9 +290,9 @@ The sounds are synthetic and were made for these tests; `tests/data/README.md` d
 
 ## Limitations
 
-- **Push API.** stb_vorbis's "push" API (`stb_vorbis_open_pushdata` and
-  `stb_vorbis_decode_frame_pushdata`, for feeding the decoder a file in pieces) has not been
-  ported. To decode from a file on disk, read it into memory and pass the bytes.
+- **Reading from disk.** stb_vorbis's functions that take a filename or a `FILE*` have not
+  been ported. To decode a file on disk, read it into memory and use `Vorbis`, or read it in
+  pieces and hand them to `VorbisPush`.
 - **Inherited from stb_vorbis.** The port shares the original's limits: floor type 0 (found
   only in very old files, from before 2004) is not supported, only the first logical stream
   in a file is decoded, and page checksums are checked when seeking but not during normal

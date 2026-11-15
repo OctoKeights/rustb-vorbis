@@ -2,7 +2,7 @@
 //! [stb_vorbis](https://github.com/nothings/stb) (version 1.22), function for function.
 //!
 //! It keeps stb_vorbis's behaviour, order of float operations included, so it gives the same
-//! samples as the C does, to the bit. It has no dependencies and no `unsafe`.
+//! samples as the C library does, to the bit. It has no dependencies and no `unsafe`.
 //!
 //! ```no_run
 //! let file = std::fs::read("sound.ogg").unwrap();

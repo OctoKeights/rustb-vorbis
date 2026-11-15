@@ -26,8 +26,8 @@ impl BlockTables {
     /// stb_vorbis's init_blocksize for a block of `n` samples.
     pub fn new(n: usize, pi: Pi) -> BlockTables {
         let (n2, n4, n8) = (n >> 1, n >> 2, n >> 3);
-        // The cosine and sine of `x * M_PI / n` and of `x * M_PI / n / 2` as the C works them
-        // out: in doubles where M_PI is one; in floats where it is stb_vorbis's own, which C
+        // The cosine and sine of `x * M_PI / n` and of `x * M_PI / n / 2` as the C library works
+        // them out: in doubles where M_PI is one; in floats where it is stb_vorbis's own, which C
         // makes doubles for cos and sin, and C++ gives to the float cos and sin.
         let pi_over_n = |x: usize| x as f32 * PI / n as f32;
         let pi_over_2n = |x: usize| x as f32 * PI / n as f32 / 2.0;

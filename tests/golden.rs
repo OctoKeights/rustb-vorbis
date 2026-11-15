@@ -1,5 +1,5 @@
 //! The port against stb_vorbis itself: `tests/data/expected-*.txt` are what `compare/dump.c`
-//! printed for the sounds in `tests/data` with the C, and the port has to print the same.
+//! printed for the sounds in `tests/data` with the C library, and the port has to print the same.
 
 #[allow(dead_code)]
 #[path = "../examples/dump.rs"]

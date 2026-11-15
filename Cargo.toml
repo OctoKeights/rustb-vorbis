@@ -1,7 +1,7 @@
 [package]
 name = "rustb-vorbis"
 description = "A pure-Rust Ogg Vorbis decoder, ported from Sean Barrett's stb_vorbis. Bit-identical output, no dependencies and no unsafe code."
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Unlicense"
 repository = "https://github.com/OctoKeights/rustb-vorbis"
