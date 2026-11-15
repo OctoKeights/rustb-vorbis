@@ -77,132 +77,153 @@ impl BlockTables {
     }
 }
 
-/// One of the algorithm's butterflies on `e[i0]`, `e[i0 - 1]` and `e[i2]`, `e[i2 - 1]`.
+/// One of the algorithm's butterflies, on a pair of values from each of two places.
 #[inline(always)]
-fn butterfly(e: &mut [f32], i0: usize, i2: usize, a0: f32, a1: f32) {
-    let k00_20 = e[i0] - e[i2];
-    let k01_21 = e[i0 - 1] - e[i2 - 1];
-    e[i0] += e[i2];
-    e[i0 - 1] += e[i2 - 1];
-    e[i2] = k00_20 * a0 - k01_21 * a1;
-    e[i2 - 1] = k01_21 * a0 + k00_20 * a1;
+fn butterfly(e0: &mut f32, e0m1: &mut f32, e2: &mut f32, e2m1: &mut f32, a0: f32, a1: f32) {
+    let k00_20 = *e0 - *e2;
+    let k01_21 = *e0m1 - *e2m1;
+    *e0 += *e2;
+    *e0m1 += *e2m1;
+    *e2 = k00_20 * a0 - k01_21 * a1;
+    *e2m1 = k01_21 * a0 + k00_20 * a1;
+}
+
+/// Four butterflies between the top eight values of two places, with four pairs of factors.
+/// (stb_vorbis's pointers `e0` and `e2` are the last value of `hi` and of `lo`, and step down
+/// by two.)
+#[inline(always)]
+fn butterflies(hi: &mut [f32; 8], lo: &mut [f32; 8], factors: [(f32, f32); 4]) {
+    let [h0, h1, h2, h3, h4, h5, h6, h7] = hi;
+    let [l0, l1, l2, l3, l4, l5, l6, l7] = lo;
+    butterfly(h7, h6, l7, l6, factors[0].0, factors[0].1);
+    butterfly(h5, h4, l5, l4, factors[1].0, factors[1].1);
+    butterfly(h3, h2, l3, l2, factors[2].0, factors[2].1);
+    butterfly(h1, h0, l1, l0, factors[3].0, factors[3].1);
+}
+
+/// A slice's last eight values.
+#[inline(always)]
+fn last8(values: &mut [f32]) -> Option<&mut [f32; 8]> {
+    values.last_chunk_mut::<8>()
 }
 
 // the following were split out into separate functions while optimizing;
 // they could be pushed back up but eh. __forceinline showed no change;
 // they're probably already being inlined.
-fn imdct_step3_iter0_loop(n: usize, e: &mut [f32], i_off: usize, k_off: usize, a: &[f32]) {
-    let mut ee0 = i_off;
-    let mut ee2 = i_off - k_off;
-    let mut ai = 0usize;
-    for _ in 0..(n >> 2) {
-        for step in [0usize, 2, 4, 6] {
-            butterfly(e, ee0 - step, ee2 - step, a[ai], a[ai + 1]);
-            ai += 8;
-        }
-        ee0 = ee0.wrapping_sub(8);
-        ee2 = ee2.wrapping_sub(8);
+
+/// stb_vorbis's imdct_step3_iter0_loop (with `k1` 8) and imdct_step3_inner_r_loop: butterflies
+/// between the upper half of `region` and the lower, from their tops down, taking a pair of
+/// factors every `k1` values of `a`.
+///
+/// (In stb_vorbis these work down from `e + i_off` and `e + i_off - k_off`; the values they
+/// reach are always the `k_off` below each, which is `region` cut in two.)
+fn imdct_step3_inner_r_loop(region: &mut [f32], a: &[f32], k1: usize) {
+    let half = region.len() / 2;
+    let (lo, hi) = region.split_at_mut(half);
+    for ((hi, lo), a) in hi.rchunks_exact_mut(8).zip(lo.rchunks_exact_mut(8)).zip(a.chunks_exact(k1 * 4)) {
+        let (Ok(hi), Ok(lo)) = (<&mut [f32; 8]>::try_from(hi), <&mut [f32; 8]>::try_from(lo)) else { return };
+        let factors = [(a[0], a[1]), (a[k1], a[k1 + 1]), (a[k1 * 2], a[k1 * 2 + 1]), (a[k1 * 3], a[k1 * 3 + 1])];
+        butterflies(hi, lo, factors);
     }
 }
 
-fn imdct_step3_inner_r_loop(lim: usize, e: &mut [f32], d0: usize, k_off: usize, a: &[f32], k1: usize) {
-    let mut e0 = d0;
-    let mut e2 = d0 - k_off;
-    let mut ai = 0usize;
-    for _ in 0..(lim >> 2) {
-        for step in [0usize, 2, 4, 6] {
-            butterfly(e, e0 - step, e2 - step, a[ai], a[ai + 1]);
-            ai += k1;
-        }
-        e0 = e0.wrapping_sub(8);
-        e2 = e2.wrapping_sub(8);
-    }
-}
-
-fn imdct_step3_inner_s_loop(n: usize, e: &mut [f32], i_off: usize, k_off: usize, a: &[f32], a_off: usize, k0: usize) {
+/// stb_vorbis's imdct_step3_inner_s_loop: the same four butterflies, with the same factors,
+/// in each stretch of `k0` values of `region` from its top down: between the last eight values
+/// of the stretch and the eight that end half a stretch below. (The lowest stretch may be
+/// cut short just below those.)
+fn imdct_step3_inner_s_loop(region: &mut [f32], k0: usize, a: &[f32], a_off: usize) {
     let factors = [(a[0], a[1]), (a[a_off], a[a_off + 1]), (a[a_off * 2], a[a_off * 2 + 1]), (a[a_off * 3], a[a_off * 3 + 1])];
-    let mut ee0 = i_off;
-    let mut ee2 = i_off - k_off;
-    for _ in 0..n {
-        for (step, (a0, a1)) in [0usize, 2, 4, 6].into_iter().zip(factors) {
-            butterfly(e, ee0 - step, ee2 - step, a0, a1);
-        }
-        ee0 = ee0.wrapping_sub(k0);
-        ee2 = ee2.wrapping_sub(k0);
+    let half = k0 / 2;
+    for stretch in region.rchunks_mut(k0) {
+        let Some(split) = stretch.len().checked_sub(half) else { return };
+        let (lo, hi) = stretch.split_at_mut(split);
+        let (Some(hi), Some(lo)) = (last8(hi), last8(lo)) else { return };
+        butterflies(hi, lo, factors);
     }
 }
 
+/// On eight values, of which stb_vorbis's `z` points at the last.
 #[inline(always)]
-fn iter_54(e: &mut [f32], z: usize) {
-    let k00 = e[z] - e[z - 4];
-    let y0 = e[z] + e[z - 4];
-    let y2 = e[z - 2] + e[z - 6];
-    let k22 = e[z - 2] - e[z - 6];
+fn iter_54(z: &mut [f32; 8]) {
+    // (z[7 - k] is stb_vorbis's z[-k].)
+    let k00 = z[7] - z[3];
+    let y0 = z[7] + z[3];
+    let y2 = z[5] + z[1];
+    let k22 = z[5] - z[1];
 
-    e[z] = y0 + y2; // z0 + z4 + z2 + z6
-    e[z - 2] = y0 - y2; // z0 + z4 - z2 - z6
+    z[7] = y0 + y2; // z0 + z4 + z2 + z6
+    z[5] = y0 - y2; // z0 + z4 - z2 - z6
 
     // done with y0,y2
 
-    let k33 = e[z - 3] - e[z - 7];
+    let k33 = z[4] - z[0];
 
-    e[z - 4] = k00 + k33; // z0 - z4 + z3 - z7
-    e[z - 6] = k00 - k33; // z0 - z4 - z3 + z7
+    z[3] = k00 + k33; // z0 - z4 + z3 - z7
+    z[1] = k00 - k33; // z0 - z4 - z3 + z7
 
     // done with k33
 
-    let k11 = e[z - 1] - e[z - 5];
-    let y1 = e[z - 1] + e[z - 5];
-    let y3 = e[z - 3] + e[z - 7];
+    let k11 = z[6] - z[2];
+    let y1 = z[6] + z[2];
+    let y3 = z[4] + z[0];
 
-    e[z - 1] = y1 + y3; // z1 + z5 + z3 + z7
-    e[z - 3] = y1 - y3; // z1 + z5 - z3 - z7
-    e[z - 5] = k11 - k22; // z1 - z5 + z2 - z6
-    e[z - 7] = k11 + k22; // z1 - z5 - z2 + z6
+    z[6] = y1 + y3; // z1 + z5 + z3 + z7
+    z[4] = y1 - y3; // z1 + z5 - z3 - z7
+    z[2] = k11 - k22; // z1 - z5 + z2 - z6
+    z[0] = k11 + k22; // z1 - z5 - z2 + z6
 }
 
-fn imdct_step3_inner_s_loop_ld654(n: usize, e: &mut [f32], i_off: usize, a: &[f32], base_n: usize) {
+/// stb_vorbis's imdct_step3_inner_s_loop_ld654, over `region` sixteen values at a time from
+/// its top down.
+fn imdct_step3_inner_s_loop_ld654(region: &mut [f32], a: &[f32], base_n: usize) {
     let a_off = base_n >> 3;
     let a2 = a[a_off];
-    let mut z = i_off;
-    for _ in 0..n {
-        let k00 = e[z] - e[z - 8];
-        let k11 = e[z - 1] - e[z - 9];
-        let l00 = e[z - 2] - e[z - 10];
-        let l11 = e[z - 3] - e[z - 11];
-        e[z] += e[z - 8];
-        e[z - 1] += e[z - 9];
-        e[z - 2] += e[z - 10];
-        e[z - 3] += e[z - 11];
-        e[z - 8] = k00;
-        e[z - 9] = k11;
-        e[z - 10] = (l00 + l11) * a2;
-        e[z - 11] = (l11 - l00) * a2;
+    for z in region.rchunks_exact_mut(16) {
+        let Ok(z) = <&mut [f32; 16]>::try_from(z) else { return };
+        // (z[15 - k] is stb_vorbis's z[-k].)
+        let k00 = z[15] - z[7];
+        let k11 = z[14] - z[6];
+        let l00 = z[13] - z[5];
+        let l11 = z[12] - z[4];
+        z[15] += z[7];
+        z[14] += z[6];
+        z[13] += z[5];
+        z[12] += z[4];
+        z[7] = k00;
+        z[6] = k11;
+        z[5] = (l00 + l11) * a2;
+        z[4] = (l11 - l00) * a2;
 
-        let k00 = e[z - 4] - e[z - 12];
-        let k11 = e[z - 5] - e[z - 13];
-        let l00 = e[z - 6] - e[z - 14];
-        let l11 = e[z - 7] - e[z - 15];
-        e[z - 4] += e[z - 12];
-        e[z - 5] += e[z - 13];
-        e[z - 6] += e[z - 14];
-        e[z - 7] += e[z - 15];
-        e[z - 12] = k11;
-        e[z - 13] = -k00;
-        e[z - 14] = (l11 - l00) * a2;
-        e[z - 15] = (l00 + l11) * -a2;
+        let k00 = z[11] - z[3];
+        let k11 = z[10] - z[2];
+        let l00 = z[9] - z[1];
+        let l11 = z[8] - z[0];
+        z[11] += z[3];
+        z[10] += z[2];
+        z[9] += z[1];
+        z[8] += z[0];
+        z[3] = k11;
+        z[2] = -k00;
+        z[1] = (l11 - l00) * a2;
+        z[0] = (l00 + l11) * -a2;
 
-        iter_54(e, z);
-        iter_54(e, z - 8);
-        z = z.wrapping_sub(16);
+        let (low, high) = z.split_at_mut(8);
+        let (Ok(low), Ok(high)) = (<&mut [f32; 8]>::try_from(low), <&mut [f32; 8]>::try_from(high)) else { return };
+        iter_54(high);
+        iter_54(low);
     }
 }
 
 /// The inverse MDCT of the first `n / 2` values of `buffer`, giving `n` samples in place.
 /// `buf2` is scratch space of at least `n / 2` values.
+///
+/// The loops are stb_vorbis's, with its pointers that step through the buffers written as
+/// the stretches of the buffers they step through, so that the compiler can see that no
+/// value is reached for outside them. Every value is worked out by the same operations in
+/// the same order.
 pub(crate) fn inverse_mdct(buffer: &mut [f32], n: usize, tables: &BlockTables, buf2: &mut [f32]) {
     let (n2, n4, n8) = (n >> 1, n >> 2, n >> 3);
-    let a = &tables.a[..];
+    let a = &tables.a[..n2];
     let buffer = &mut buffer[..n];
     let buf2 = &mut buf2[..n2];
 
@@ -224,27 +245,17 @@ pub(crate) fn inverse_mdct(buffer: &mut [f32], n: usize, tables: &BlockTables, b
     // this propagates through linearly to the end, where the numbers
     // are 1/2 too small, and need to be compensated for.
     {
-        let mut d = n2 as isize - 2;
-        let mut aa = 0usize;
-        let mut e = 0usize;
-        while e != n2 {
-            let d0 = d as usize;
-            buf2[d0 + 1] = buffer[e] * a[aa] - buffer[e + 2] * a[aa + 1];
-            buf2[d0] = buffer[e] * a[aa + 1] + buffer[e + 2] * a[aa];
-            d -= 2;
-            aa += 2;
-            e += 4;
+        let (low, high) = buf2.split_at_mut(n4);
+        let (a_low, a_high) = a.split_at(n4);
+        // (d steps down through the upper half of buf2 as e steps up through the buffer.)
+        for ((d, e), aa) in high.rchunks_exact_mut(2).zip(buffer[..n2].chunks_exact(4)).zip(a_low.chunks_exact(2)) {
+            d[1] = e[0] * aa[0] - e[2] * aa[1];
+            d[0] = e[0] * aa[1] + e[2] * aa[0];
         }
-
-        let mut e = n2 as isize - 3;
-        while d >= 0 {
-            let d0 = d as usize;
-            let e0 = e as usize;
-            buf2[d0 + 1] = -buffer[e0 + 2] * a[aa] - -buffer[e0] * a[aa + 1];
-            buf2[d0] = -buffer[e0 + 2] * a[aa + 1] + -buffer[e0] * a[aa];
-            d -= 2;
-            aa += 2;
-            e -= 4;
+        // (and on down through its lower half as e steps back down.)
+        for ((d, e), aa) in low.rchunks_exact_mut(2).zip(buffer[..n2].rchunks_exact(4)).zip(a_high.chunks_exact(2)) {
+            d[1] = -e[3] * aa[0] - -e[1] * aa[1];
+            d[0] = -e[3] * aa[1] + -e[1] * aa[0];
         }
     }
 
@@ -259,29 +270,23 @@ pub(crate) fn inverse_mdct(buffer: &mut [f32], n: usize, tables: &BlockTables, b
     // this could be in place, but the data ends up in the wrong
     // place... _somebody_'s got to swap it, so this is nominated
     {
-        let mut aa = n2 as isize - 8;
-        let (mut e0, mut e1, mut d0, mut d1) = (n4, 0usize, n4, 0usize);
-        while aa >= 0 {
-            let ai = aa as usize;
-            let v41_21 = v[e0 + 1] - v[e1 + 1];
-            let v40_20 = v[e0] - v[e1];
-            u[d0 + 1] = v[e0 + 1] + v[e1 + 1];
-            u[d0] = v[e0] + v[e1];
-            u[d1 + 1] = v41_21 * a[ai + 4] - v40_20 * a[ai + 5];
-            u[d1] = v40_20 * a[ai + 4] + v41_21 * a[ai + 5];
+        let (v1, v0) = v.split_at(n4);
+        let (u1, u0) = u[..n2].split_at_mut(n4);
+        let stretches = u0.chunks_exact_mut(4).zip(u1.chunks_exact_mut(4)).zip(v0.chunks_exact(4).zip(v1.chunks_exact(4)));
+        for (((d0, d1), (e0, e1)), aa) in stretches.zip(a.rchunks_exact(8)) {
+            let v41_21 = e0[1] - e1[1];
+            let v40_20 = e0[0] - e1[0];
+            d0[1] = e0[1] + e1[1];
+            d0[0] = e0[0] + e1[0];
+            d1[1] = v41_21 * aa[4] - v40_20 * aa[5];
+            d1[0] = v40_20 * aa[4] + v41_21 * aa[5];
 
-            let v41_21 = v[e0 + 3] - v[e1 + 3];
-            let v40_20 = v[e0 + 2] - v[e1 + 2];
-            u[d0 + 3] = v[e0 + 3] + v[e1 + 3];
-            u[d0 + 2] = v[e0 + 2] + v[e1 + 2];
-            u[d1 + 3] = v41_21 * a[ai] - v40_20 * a[ai + 1];
-            u[d1 + 2] = v40_20 * a[ai] + v41_21 * a[ai + 1];
-
-            aa -= 8;
-            d0 += 4;
-            d1 += 4;
-            e0 += 4;
-            e1 += 4;
+            let v41_21 = e0[3] - e1[3];
+            let v40_20 = e0[2] - e1[2];
+            d0[3] = e0[3] + e1[3];
+            d0[2] = e0[2] + e1[2];
+            d1[3] = v41_21 * aa[0] - v40_20 * aa[1];
+            d1[2] = v40_20 * aa[0] + v41_21 * aa[1];
         }
     }
 
@@ -296,21 +301,20 @@ pub(crate) fn inverse_mdct(buffer: &mut [f32], n: usize, tables: &BlockTables, b
     // switch between them halfway.
 
     // this is iteration 0 of step 3
-    imdct_step3_iter0_loop(n >> 4, u, n2 - 1, n >> 3, a);
-    imdct_step3_iter0_loop(n >> 4, u, n2 - 1 - n4, n >> 3, a);
+    imdct_step3_inner_r_loop(&mut u[n4..n2], a, 8);
+    imdct_step3_inner_r_loop(&mut u[..n4], a, 8);
 
     // this is iteration 1 of step 3
-    for i in 0..4 {
-        imdct_step3_inner_r_loop(n >> 5, u, n2 - 1 - n8 * i, n >> 4, a, 16);
+    for region in u[..n2].rchunks_exact_mut(n8) {
+        imdct_step3_inner_r_loop(region, a, 16);
     }
 
     let mut l = 2i32;
     while l < (ld - 3) >> 1 {
         let k0 = n >> (l + 2);
-        let k0_2 = k0 >> 1;
         let lim = 1usize << (l + 1);
-        for i in 0..lim {
-            imdct_step3_inner_r_loop(n >> (l + 4), u, n2 - 1 - k0 * i, k0_2, a, 1 << (l + 3));
+        for region in u[..n2].rchunks_exact_mut(k0).take(lim) {
+            imdct_step3_inner_r_loop(region, a, 1 << (l + 3));
         }
         l += 1;
     }
@@ -318,15 +322,18 @@ pub(crate) fn inverse_mdct(buffer: &mut [f32], n: usize, tables: &BlockTables, b
     while l < ld - 6 {
         let k0 = n >> (l + 2);
         let k1 = 1usize << (l + 3);
-        let k0_2 = k0 >> 1;
         let rlim = n >> (l + 6);
         let lim = 1usize << (l + 1);
         let mut a0 = 0usize;
-        let mut i_off = n2 - 1;
+        let mut top = n2;
         for _ in 0..rlim {
-            imdct_step3_inner_s_loop(lim, u, i_off, k0_2, &a[a0..], k1, k0);
+            // (lim stretches of k0 values, the highest ending at `top`; of the lowest, only as
+            // far down as the loop reaches.)
+            let reach = (lim - 1) * k0 + k0 / 2 + 8;
+            let Some(region) = top.checked_sub(reach).and_then(|bottom| u.get_mut(bottom..top)) else { break };
+            imdct_step3_inner_s_loop(region, k0, &a[a0..], k1);
             a0 += k1 * 4;
-            i_off = i_off.wrapping_sub(8);
+            top = top.wrapping_sub(8);
         }
         l += 1;
     }
@@ -336,38 +343,32 @@ pub(crate) fn inverse_mdct(buffer: &mut [f32], n: usize, tables: &BlockTables, b
     //       the big win comes from getting rid of needless flops
     //         due to the constants on pass 5 & 4 being all 1 and 0;
     //       combining them to be simultaneous to improve cache made little difference
-    imdct_step3_inner_s_loop_ld654(n >> 5, u, n2 - 1, a, n);
+    imdct_step3_inner_s_loop_ld654(&mut u[..n2], a, n);
 
     // output is u
 
     // step 4, 5, and 6
     // cannot be in-place because of step 5
     {
-        let bitrev = &tables.bit_reverse[..];
         // weirdly, I'd have thought reading sequentially and writing
         // erratically would have been better than vice-versa, but in
         // fact that's not what my testing showed. (That is, with
         // j = bitreverse(i), do you read i and write j, or read j and write i.)
-        let mut d0 = n4 as isize - 4;
-        let mut d1 = n2 as isize - 4;
-        let mut br = 0usize;
-        while d0 >= 0 {
-            let (p0, p1) = (d0 as usize, d1 as usize);
-            let k4 = usize::from(bitrev[br]);
-            v[p1 + 3] = u[k4];
-            v[p1 + 2] = u[k4 + 1];
-            v[p0 + 3] = u[k4 + 2];
-            v[p0 + 2] = u[k4 + 3];
+        let (v0, v1) = v.split_at_mut(n4);
+        for ((d0, d1), bitrev) in v0.rchunks_exact_mut(4).zip(v1.rchunks_exact_mut(4)).zip(tables.bit_reverse.chunks_exact(2)) {
+            let k4 = usize::from(bitrev[0]);
+            let Some(from) = u.get(k4..k4 + 4) else { return };
+            d1[3] = from[0];
+            d1[2] = from[1];
+            d0[3] = from[2];
+            d0[2] = from[3];
 
-            let k4 = usize::from(bitrev[br + 1]);
-            v[p1 + 1] = u[k4];
-            v[p1] = u[k4 + 1];
-            v[p0 + 1] = u[k4 + 2];
-            v[p0] = u[k4 + 3];
-
-            d0 -= 4;
-            d1 -= 4;
-            br += 2;
+            let k4 = usize::from(bitrev[1]);
+            let Some(from) = u.get(k4..k4 + 4) else { return };
+            d1[1] = from[0];
+            d1[0] = from[1];
+            d0[1] = from[2];
+            d0[0] = from[3];
         }
     }
     // (paper output is u, now v)
@@ -377,42 +378,35 @@ pub(crate) fn inverse_mdct(buffer: &mut [f32], n: usize, tables: &BlockTables, b
     // step 7   (paper output is v, now v)
     // this is now in place
     {
-        let c = &tables.c[..];
-        let mut ci = 0usize;
-        let mut d = 0usize;
-        let mut e = n2 - 4;
-        while d < e {
-            let a02 = v[d] - v[e + 2];
-            let a11 = v[d + 1] + v[e + 3];
+        let (front, back) = v.split_at_mut(n4);
+        for ((d, e), c) in front.chunks_exact_mut(4).zip(back.rchunks_exact_mut(4)).zip(tables.c.chunks_exact(4)) {
+            let a02 = d[0] - e[2];
+            let a11 = d[1] + e[3];
 
-            let b0 = c[ci + 1] * a02 + c[ci] * a11;
-            let b1 = c[ci + 1] * a11 - c[ci] * a02;
+            let b0 = c[1] * a02 + c[0] * a11;
+            let b1 = c[1] * a11 - c[0] * a02;
 
-            let b2 = v[d] + v[e + 2];
-            let b3 = v[d + 1] - v[e + 3];
+            let b2 = d[0] + e[2];
+            let b3 = d[1] - e[3];
 
-            v[d] = b2 + b0;
-            v[d + 1] = b3 + b1;
-            v[e + 2] = b2 - b0;
-            v[e + 3] = b1 - b3;
+            d[0] = b2 + b0;
+            d[1] = b3 + b1;
+            e[2] = b2 - b0;
+            e[3] = b1 - b3;
 
-            let a02 = v[d + 2] - v[e];
-            let a11 = v[d + 3] + v[e + 1];
+            let a02 = d[2] - e[0];
+            let a11 = d[3] + e[1];
 
-            let b0 = c[ci + 3] * a02 + c[ci + 2] * a11;
-            let b1 = c[ci + 3] * a11 - c[ci + 2] * a02;
+            let b0 = c[3] * a02 + c[2] * a11;
+            let b1 = c[3] * a11 - c[2] * a02;
 
-            let b2 = v[d + 2] + v[e];
-            let b3 = v[d + 3] - v[e + 1];
+            let b2 = d[2] + e[0];
+            let b3 = d[3] - e[1];
 
-            v[d + 2] = b2 + b0;
-            v[d + 3] = b3 + b1;
-            v[e] = b2 - b0;
-            v[e + 1] = b1 - b3;
-
-            ci += 4;
-            d += 4;
-            e -= 4;
+            d[2] = b2 + b0;
+            d[3] = b3 + b1;
+            e[0] = b2 - b0;
+            e[1] = b1 - b3;
         }
     }
 
@@ -425,51 +419,42 @@ pub(crate) fn inverse_mdct(buffer: &mut [f32], n: usize, tables: &BlockTables, b
 
     // this cannot POSSIBLY be in place, so we refer to the buffers directly
     {
-        let b = &tables.b[..];
-        let mut bi = n2 as isize - 8;
-        let mut e = n2 as isize - 8;
-        let (mut d0, mut d1, mut d2, mut d3) = (0usize, n2 - 4, n2, n - 4);
-        while e >= 0 {
-            let (ei, bb) = (e as usize, bi as usize);
+        let (first, second) = u.split_at_mut(n2);
+        let (q0, q1) = first.split_at_mut(n4);
+        let (q2, q3) = second.split_at_mut(n4);
+        let outputs = q0.chunks_exact_mut(4).zip(q1.rchunks_exact_mut(4)).zip(q2.chunks_exact_mut(4).zip(q3.rchunks_exact_mut(4)));
+        for (((d0, d1), (d2, d3)), (e, b)) in outputs.zip(v.rchunks_exact(8).zip(tables.b[..n2].rchunks_exact(8))) {
+            let p3 = e[6] * b[7] - e[7] * b[6];
+            let p2 = -e[6] * b[6] - e[7] * b[7];
 
-            let p3 = v[ei + 6] * b[bb + 7] - v[ei + 7] * b[bb + 6];
-            let p2 = -v[ei + 6] * b[bb + 6] - v[ei + 7] * b[bb + 7];
+            d0[0] = p3;
+            d1[3] = -p3;
+            d2[0] = p2;
+            d3[3] = p2;
 
-            u[d0] = p3;
-            u[d1 + 3] = -p3;
-            u[d2] = p2;
-            u[d3 + 3] = p2;
+            let p1 = e[4] * b[5] - e[5] * b[4];
+            let p0 = -e[4] * b[4] - e[5] * b[5];
 
-            let p1 = v[ei + 4] * b[bb + 5] - v[ei + 5] * b[bb + 4];
-            let p0 = -v[ei + 4] * b[bb + 4] - v[ei + 5] * b[bb + 5];
+            d0[1] = p1;
+            d1[2] = -p1;
+            d2[1] = p0;
+            d3[2] = p0;
 
-            u[d0 + 1] = p1;
-            u[d1 + 2] = -p1;
-            u[d2 + 1] = p0;
-            u[d3 + 2] = p0;
+            let p3 = e[2] * b[3] - e[3] * b[2];
+            let p2 = -e[2] * b[2] - e[3] * b[3];
 
-            let p3 = v[ei + 2] * b[bb + 3] - v[ei + 3] * b[bb + 2];
-            let p2 = -v[ei + 2] * b[bb + 2] - v[ei + 3] * b[bb + 3];
+            d0[2] = p3;
+            d1[1] = -p3;
+            d2[2] = p2;
+            d3[1] = p2;
 
-            u[d0 + 2] = p3;
-            u[d1 + 1] = -p3;
-            u[d2 + 2] = p2;
-            u[d3 + 1] = p2;
+            let p1 = e[0] * b[1] - e[1] * b[0];
+            let p0 = -e[0] * b[0] - e[1] * b[1];
 
-            let p1 = v[ei] * b[bb + 1] - v[ei + 1] * b[bb];
-            let p0 = -v[ei] * b[bb] - v[ei + 1] * b[bb + 1];
-
-            u[d0 + 3] = p1;
-            u[d1] = -p1;
-            u[d2 + 3] = p0;
-            u[d3] = p0;
-
-            bi -= 8;
-            e -= 8;
-            d0 += 4;
-            d2 += 4;
-            d1 = d1.wrapping_sub(4);
-            d3 = d3.wrapping_sub(4);
+            d0[3] = p1;
+            d1[0] = -p1;
+            d2[3] = p0;
+            d3[0] = p0;
         }
     }
 }
