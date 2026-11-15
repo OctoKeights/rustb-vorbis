@@ -1,6 +1,6 @@
-/* Prints what stb_vorbis makes of Ogg Vorbis files, through every function of its pull API, in
- * the same form as examples/dump.rs does with the Rust port. compare.sh runs both and compares
- * them.
+/* Prints what stb_vorbis makes of Ogg Vorbis files, through every function of its pull API and
+ * of its push API, in the same form as examples/dump.rs does with the Rust port. compare.sh
+ * runs both and compares them.
  *
  *   cc -O2 [-DFLOAT_PI] -I <folder with stb_vorbis.c> dump.c -lm -o dump
  *   ./dump <file.ogg>...
@@ -22,7 +22,6 @@
 #endif
 
 #define STB_VORBIS_NO_STDIO
-#define STB_VORBIS_NO_PUSHDATA_API
 #include "stb_vorbis.c"
 
 #include <stdint.h>
@@ -212,6 +211,96 @@ static void frames_short_planar(stb_vorbis *v, int channels, int room, char *tex
    sprintf(text, "%zu %zu %016llx", frames, total, (unsigned long long) hash);
 }
 
+/* The push API: the file handed over `chunk` bytes more at a time. Every call's results go
+   into one sum; then the decoder is told four times that it has been moved in the file
+   (flush) and has to find a page and decode a few frames from there. */
+static void push(const unsigned char *data, int size, int chunk)
+{
+   stb_vorbis *v = NULL;
+   stb_vorbis_info info;
+   uint64_t hash = hash_new();
+   int avail = chunk < size ? chunk : size;
+   int used = 0, error = 0, pos, i, k;
+   size_t frames = 0, total = 0, steps = 0;
+   int places[4];
+
+   for (;;) {
+      v = stb_vorbis_open_pushdata(data, avail, &used, &error, NULL);
+      if (v || error != VORBIS_need_more_data || avail == size) break;
+      avail = avail + chunk < size ? avail + chunk : size;
+   }
+   if (!v) {
+      printf("push %d open error %d\n", chunk, error);
+      return;
+   }
+   info = stb_vorbis_get_info(v);
+   printf("push %d open %d %d %u %d\n", chunk, used, info.channels, info.sample_rate, info.max_frame_size);
+
+   pos = used;
+   while (steps < 50000000) {
+      float **output = NULL;
+      int channels = 0, samples = 0;
+      int n = stb_vorbis_decode_frame_pushdata(v, data + pos, avail - pos, &channels, &output, &samples);
+      ++steps;
+      hash_u32(&hash, (uint32_t) n);
+      hash_u32(&hash, (uint32_t) samples);
+      hash_u32(&hash, (uint32_t) stb_vorbis_get_error(v));
+      hash_u32(&hash, (uint32_t) stb_vorbis_get_sample_offset(v));
+      if (n == 0) {
+         if (avail == size) break;
+         avail = avail + chunk < size ? avail + chunk : size;
+         continue;
+      }
+      pos += n;
+      if (pos > avail) break; /* (a decoder past the bytes it was given: nothing more to ask) */
+      if (samples > 0) {
+         for (i = 0; i < info.channels; ++i)
+            hash_floats(&hash, output[i], samples);
+         ++frames;
+         total += samples;
+      }
+   }
+   printf("push %d frames %zu %zu %zu %016llx at %d %d\n", chunk, steps, frames, total, (unsigned long long) hash, pos, stb_vorbis_get_sample_offset(v));
+
+   places[0] = 0;
+   places[1] = size / 3;
+   places[2] = size / 2 + 17;
+   places[3] = size / 8 * 7;
+   for (k = 0; k < 4; ++k) {
+      int found = -2, good = 0;
+      hash = hash_new();
+      steps = 0;
+      stb_vorbis_flush_pushdata(v);
+      pos = places[k];
+      avail = pos + chunk < size ? pos + chunk : size;
+      while (good < 3 && steps < 50000000) {
+         float **output = NULL;
+         int channels = 0, samples = 0;
+         int n = stb_vorbis_decode_frame_pushdata(v, data + pos, avail - pos, &channels, &output, &samples);
+         ++steps;
+         hash_u32(&hash, (uint32_t) n);
+         hash_u32(&hash, (uint32_t) samples);
+         hash_u32(&hash, (uint32_t) stb_vorbis_get_error(v));
+         if (found == -2 && stb_vorbis_get_sample_offset(v) != -1)
+            found = stb_vorbis_get_sample_offset(v);
+         if (n == 0) {
+            if (avail == size) break;
+            avail = avail + chunk < size ? avail + chunk : size;
+            continue;
+         }
+         pos += n;
+         if (pos > avail) break;
+         if (samples > 0) {
+            for (i = 0; i < info.channels; ++i)
+               hash_floats(&hash, output[i], samples);
+            ++good;
+         }
+      }
+      printf("push %d flush %d %zu %d %d %016llx at %d %d\n", chunk, places[k], steps, good, found, (unsigned long long) hash, pos, stb_vorbis_get_sample_offset(v));
+   }
+   stb_vorbis_close(v);
+}
+
 static void dump(const char *path)
 {
    const char *name = path, *p;
@@ -368,6 +457,14 @@ static void dump(const char *path)
          free(samples);
       }
    }
+
+   push(data, (int) size, (int) size);
+   push(data, (int) size, 4096);
+   push(data, (int) size, 517);
+   push(data, (int) size, 61);
+   /* (A byte at a time, where that doesn't take all day.) */
+   if (size <= 20000)
+      push(data, (int) size, 1);
    free(data);
 }
 

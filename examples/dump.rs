@@ -7,7 +7,7 @@
 //! `--float-pi`: as stb_vorbis built without the C library's M_PI; `--float-pi-cpp`: and as
 //! C++ (see `Pi`).
 
-use rustb_vorbis::{decode_memory_with_pi, Pi, Vorbis};
+use rustb_vorbis::{decode_memory_with_pi, Pi, Vorbis, VorbisError, VorbisPush};
 use std::io::Write;
 
 /// FNV-1a, 64 bits.
@@ -179,6 +179,98 @@ fn frames_short_planar(vorbis: &mut Vorbis, channels: usize, room: usize) -> Str
     format!("{frames} {total} {:016x}", hash.0)
 }
 
+fn push_offset(vorbis: &VorbisPush) -> i32 {
+    vorbis.sample_offset().map_or(-1, |offset| offset as i32)
+}
+
+/// The push API: the file handed over `chunk` bytes more at a time. Every call's results go
+/// into one sum; then the decoder is told four times that it has been moved in the file
+/// (flush) and has to find a page and decode a few frames from there.
+fn push(data: &[u8], chunk: usize, pi: Pi, out: &mut Vec<u8>) {
+    let size = data.len();
+    let mut avail = chunk.min(size);
+    let (mut vorbis, used) = loop {
+        match VorbisPush::open_with_pi(&data[..avail], pi) {
+            Ok(opened) => break opened,
+            Err(VorbisError::NeedMoreData) if avail != size => avail = (avail + chunk).min(size),
+            Err(error) => {
+                let _ = writeln!(out, "push {chunk} open error {}", error.code());
+                return;
+            }
+        }
+    };
+    let info = vorbis.info();
+    let _ = writeln!(out, "push {chunk} open {used} {} {} {}", info.channels, info.sample_rate, info.max_frame_size);
+
+    let mut hash = Hash::new();
+    let mut pos = used;
+    let (mut frames, mut total, mut steps) = (0usize, 0usize, 0usize);
+    while steps < 50_000_000 {
+        let step = vorbis.decode_frame(&data[pos..avail]);
+        steps += 1;
+        hash.u32(step.bytes_used as u32);
+        hash.u32(step.samples as u32);
+        hash.u32(vorbis.take_error().map_or(0, |error| error.code()) as u32);
+        hash.u32(push_offset(&vorbis) as u32);
+        if step.bytes_used == 0 {
+            if avail == size {
+                break;
+            }
+            avail = (avail + chunk).min(size);
+            continue;
+        }
+        pos += step.bytes_used;
+        if pos > avail {
+            break;
+        }
+        if step.samples > 0 {
+            for channel in 0..info.channels {
+                hash.floats(&vorbis.frame(channel)[..step.samples]);
+            }
+            frames += 1;
+            total += step.samples;
+        }
+    }
+    let _ = writeln!(out, "push {chunk} frames {steps} {frames} {total} {:016x} at {pos} {}", hash.0, push_offset(&vorbis));
+
+    for place in [0, size / 3, size / 2 + 17, size / 8 * 7] {
+        let (mut found, mut good) = (-2i32, 0);
+        let mut hash = Hash::new();
+        let mut steps = 0usize;
+        vorbis.flush();
+        let mut pos = place.min(size);
+        let mut avail = (pos + chunk).min(size);
+        while good < 3 && steps < 50_000_000 {
+            let step = vorbis.decode_frame(&data[pos..avail]);
+            steps += 1;
+            hash.u32(step.bytes_used as u32);
+            hash.u32(step.samples as u32);
+            hash.u32(vorbis.take_error().map_or(0, |error| error.code()) as u32);
+            if found == -2 && push_offset(&vorbis) != -1 {
+                found = push_offset(&vorbis);
+            }
+            if step.bytes_used == 0 {
+                if avail == size {
+                    break;
+                }
+                avail = (avail + chunk).min(size);
+                continue;
+            }
+            pos += step.bytes_used;
+            if pos > avail {
+                break;
+            }
+            if step.samples > 0 {
+                for channel in 0..info.channels {
+                    hash.floats(&vorbis.frame(channel)[..step.samples]);
+                }
+                good += 1;
+            }
+        }
+        let _ = writeln!(out, "push {chunk} flush {place} {steps} {good} {found} {:016x} at {pos} {}", hash.0, push_offset(&vorbis));
+    }
+}
+
 /// Everything about one file, as text.
 pub fn dump(path: &str, pi: Pi, out: &mut Vec<u8>) {
     let _ = writeln!(out, "file {}", path.rsplit(['/', '\\']).next().unwrap_or(path));
@@ -278,6 +370,15 @@ pub fn dump(path: &str, pi: Pi, out: &mut Vec<u8>) {
         Err(_) => {
             let _ = writeln!(out, "whole error");
         }
+    }
+
+    push(&data, data.len(), pi, out);
+    push(&data, 4096, pi, out);
+    push(&data, 517, pi, out);
+    push(&data, 61, pi, out);
+    // (A byte at a time, where that doesn't take all day.)
+    if data.len() <= 20000 {
+        push(&data, 1, pi, out);
     }
 }
 
