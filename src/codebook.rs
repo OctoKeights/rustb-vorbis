@@ -8,6 +8,9 @@ use crate::VorbisError;
 pub(crate) const FAST_HUFFMAN_LENGTH: u32 = 10;
 pub(crate) const FAST_HUFFMAN_TABLE_SIZE: usize = 1 << FAST_HUFFMAN_LENGTH;
 const FAST_HUFFMAN_TABLE_MASK: u32 = FAST_HUFFMAN_TABLE_SIZE as u32 - 1;
+/// Where a codeword's length sits in its entry of the fast table, above its position (which is
+/// under 32767).
+const FAST_LENGTH_SHIFT: u32 = 16;
 
 /// A codeword length meaning "this entry is not used".
 pub(crate) const NO_CODE: u8 = 255;
@@ -26,7 +29,10 @@ pub(crate) struct Codebook {
     pub multiplicands: Vec<f32>,
     /// Nothing for a sparse codebook once it is built.
     pub codewords: Option<Vec<u32>>,
-    pub fast_huffman: Vec<i16>,
+    /// For each run of bits a codeword can begin with: -1, or the codeword's position in the
+    /// tables with its length above it ([`FAST_LENGTH_SHIFT`]), so that the usual codeword is
+    /// one look in one table. stb_vorbis keeps the position alone and looks the length up.
+    pub fast_huffman: Box<[i32; FAST_HUFFMAN_TABLE_SIZE]>,
     pub sorted_codewords: Option<Vec<u32>>,
     pub sorted_values: Vec<i32>,
     pub sorted_entries: i32,
@@ -47,7 +53,7 @@ impl Codebook {
             lookup_values: 0,
             multiplicands: Vec::new(),
             codewords: None,
-            fast_huffman: vec![-1; FAST_HUFFMAN_TABLE_SIZE],
+            fast_huffman: Box::new([-1; FAST_HUFFMAN_TABLE_SIZE]),
             sorted_codewords: None,
             sorted_values: Vec::new(),
             sorted_entries: 0,
@@ -178,10 +184,11 @@ fn compute_accelerated_huffman(c: &mut Codebook) {
     for i in 0..len as usize {
         let length = u32::from(c.length(i));
         if length <= FAST_HUFFMAN_LENGTH {
+            let entry = i as i32 | (length as i32) << FAST_LENGTH_SHIFT;
             let mut z = if c.sparse { bit_reverse(c.sorted_codewords.as_ref().map_or(0, |sorted| sorted[i])) } else { c.codewords.as_ref().map_or(0, |codewords| codewords[i]) };
             // set table entries for all bit combinations in the higher bits
             while (z as usize) < FAST_HUFFMAN_TABLE_SIZE {
-                c.fast_huffman[z as usize] = i as i16;
+                c.fast_huffman[z as usize] = entry;
                 z += 1 << length;
             }
         }
@@ -445,6 +452,7 @@ pub(crate) fn read_codebook(f: &mut Io, last: bool) -> Result<Codebook, VorbisEr
     Ok(c)
 }
 
+#[inline(never)]
 fn codebook_decode_scalar_raw(f: &mut Io, c: &Codebook) -> i32 {
     f.prep_huffman();
 
@@ -510,16 +518,18 @@ fn codebook_decode_scalar_raw(f: &mut Io, c: &Codebook) -> i32 {
 
 /// stb_vorbis's DECODE_RAW: the next codeword's position in the codebook's tables (the symbol
 /// itself for a codebook that isn't sparse), or -1.
-#[inline]
+#[inline(always)]
 pub(crate) fn decode_raw(f: &mut Io, c: &Codebook) -> i32 {
     if f.valid_bits < FAST_HUFFMAN_LENGTH as i32 {
         f.prep_huffman();
     }
     // fast huffman table lookup
-    let mut var = i32::from(c.fast_huffman[(f.acc & FAST_HUFFMAN_TABLE_MASK) as usize]);
+    let mut var = c.fast_huffman[(f.acc & FAST_HUFFMAN_TABLE_MASK) as usize];
     if var >= 0 {
-        let n = i32::from(c.length(var as usize));
-        f.acc = f.acc.checked_shr(n as u32).unwrap_or(0);
+        // (A length here is 10 at most.)
+        let n = var >> FAST_LENGTH_SHIFT;
+        var &= (1 << FAST_LENGTH_SHIFT) - 1;
+        f.acc >>= n as u32 & 31;
         f.valid_bits -= n;
         if f.valid_bits < 0 {
             f.valid_bits = 0;
