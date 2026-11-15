@@ -12,3 +12,8 @@ keywords = ["vorbis", "ogg", "audio", "decoder", "stb"]
 categories = ["multimedia::audio", "multimedia::encoding"]
 
 [dependencies]
+
+# The tests decode a good deal of sound: optimised (with overflow checks and debug assertions
+# still on), they take seconds where they would take minutes.
+[profile.test]
+opt-level = 2
