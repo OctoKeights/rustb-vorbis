@@ -48,11 +48,17 @@ impl<'a> FileIo<'a> {
         FileIo { file, start, stream_len, pos: u64::from(start), buffer: Vec::new(), buffer_start: 0, file_pos: None }
     }
 
+    /// The bytes read ahead from the position on, without reading any more of the file.
+    #[inline]
+    fn buffered(&self) -> &[u8] {
+        let from = self.pos.checked_sub(self.buffer_start).and_then(|from| usize::try_from(from).ok());
+        from.and_then(|from| self.buffer.get(from..)).unwrap_or_default()
+    }
+
     /// The bytes of the buffer from the position on; reads more of the file if there are none.
     /// Nothing at the end of the file (or where the file can't be read).
     fn ahead(&mut self) -> &[u8] {
-        let buffered = self.pos >= self.buffer_start && self.pos - self.buffer_start < self.buffer.len() as u64;
-        if !buffered {
+        if self.buffered().is_empty() {
             self.buffer.clear();
             self.buffer_start = self.pos;
             if self.file_pos != Some(self.pos) {
@@ -83,8 +89,12 @@ impl<'a> FileIo<'a> {
     }
 
     /// `fgetc`
+    #[inline]
     fn get8(&mut self) -> Option<u8> {
-        let byte = self.ahead().first().copied()?;
+        let byte = match self.buffered().first() {
+            Some(&byte) => byte,
+            None => self.ahead().first().copied()?,
+        };
         self.pos += 1;
         Some(byte)
     }
@@ -201,7 +211,7 @@ impl<'a> Io<'a> {
     }
 
     /// The end of the bytes in memory: the end of the file, or a file on disk to read from.
-    #[cold]
+    #[inline(never)]
     fn get8_slow(&mut self) -> u8 {
         if let Some(byte) = self.file.as_mut().and_then(|file| file.get8()) {
             return byte;
@@ -597,11 +607,38 @@ impl<'a> Io<'a> {
     // expand the buffer to as many bits as possible without reading off end of packet
     // it might be nice to allow f->valid_bits and f->acc to be stored in registers,
     // e.g. cache them locally and decode locally
-    #[inline]
+    #[inline(never)]
     pub fn prep_huffman(&mut self) {
         if self.valid_bits <= 24 {
             if self.valid_bits == 0 {
                 self.acc = 0;
+            }
+            // The usual case, when the bytes wanted are all in this segment and in memory (or,
+            // of a file on disk, read ahead): the loop below, without its asking about the
+            // segment for each byte.
+            if self.valid_bits >= 0 {
+                let count = (32 - self.valid_bits as usize) / 8;
+                if usize::from(self.bytes_in_seg) >= count {
+                    let bytes = match &self.file {
+                        None => self.data.get(self.pos..).and_then(|rest| rest.get(..count)),
+                        Some(file) => file.buffered().get(..count),
+                    };
+                    if let Some(bytes) = bytes {
+                        let (mut acc, mut valid_bits) = (self.acc, self.valid_bits);
+                        for &byte in bytes {
+                            acc = acc.wrapping_add(u32::from(byte) << valid_bits);
+                            valid_bits += 8;
+                        }
+                        (self.acc, self.valid_bits) = (acc, valid_bits);
+                        self.bytes_in_seg -= count as u8;
+                        self.packet_bytes += count as i32;
+                        match self.file.as_mut() {
+                            None => self.pos += count,
+                            Some(file) => file.pos += count as u64,
+                        }
+                        return;
+                    }
+                }
             }
             loop {
                 if self.last_seg && self.bytes_in_seg == 0 {
