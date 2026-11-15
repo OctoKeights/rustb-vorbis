@@ -100,7 +100,14 @@ impl<'a> FileIo<'a> {
     }
 
     /// `fread(out, n, 1, f) == 1`: all of `out`, or as much as the file has and "failed".
+    ///
+    /// Reading nothing "fails" too: C's `fread` of one item of no bytes gives 0 items. So a
+    /// page with no segments, which stb_vorbis reads from memory, is the end of the file to
+    /// it when it reads from disk, and it is the same here.
     fn getn(&mut self, out: &mut [u8]) -> bool {
+        if out.is_empty() {
+            return false;
+        }
         let mut done = 0;
         while done < out.len() {
             let ahead = self.ahead();

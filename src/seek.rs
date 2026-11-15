@@ -141,7 +141,9 @@ impl Vorbis<'_> {
         }
         let mut lacing = [0u8; 255];
         let lacing = &mut lacing[..usize::from(header[26])];
-        if !f.getn(lacing) {
+        // (A page with no segments has nothing to read. From a file on disk that counts as
+        // failing, as it does in C, but there is nothing missing and stb_vorbis goes on.)
+        if !f.getn(lacing) && !lacing.is_empty() {
             return None;
         }
 

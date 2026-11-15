@@ -17,7 +17,7 @@ fn sounds() -> Vec<String> {
         .map(|path| path.to_str().unwrap().to_string())
         .collect();
     paths.sort();
-    assert_eq!(paths.len(), 7);
+    assert_eq!(paths.len(), 8);
     paths
 }
 
