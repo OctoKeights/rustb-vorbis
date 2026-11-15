@@ -1,6 +1,6 @@
 //! How the decoder behaves, on the sounds in `tests/data` and on broken copies of them.
 
-use rustb_vorbis::{decode_memory, decode_memory_with_pi, Pi, Vorbis, VorbisError, VorbisPush};
+use rustb_vorbis::{decode_filename, decode_memory, decode_memory_with_pi, Pi, Vorbis, VorbisError, VorbisPush};
 
 fn sound(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
@@ -316,6 +316,92 @@ fn finding_its_place_again() {
     }
 }
 
+fn path(name: &str) -> String {
+    format!("{}/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
+#[test]
+fn a_file_on_disk_gives_the_same_samples() {
+    for name in ["stereo_48k_q5.ogg", "mono_long.ogg", "mono_tiny.ogg"] {
+        let data = sound(name);
+        let in_memory = decode_memory(&data).unwrap();
+        assert_eq!(decode_filename(path(name)).unwrap(), in_memory, "{name}");
+
+        // Read as it goes, with everything the decoder in memory can do.
+        let mut on_disk = Vorbis::open_filename(path(name)).unwrap();
+        let mut whole = Vorbis::open(&data).unwrap();
+        assert_eq!(on_disk.info(), whole.info());
+        assert_eq!(on_disk.comments(), whole.comments());
+        assert_eq!(on_disk.stream_length_in_samples(), whole.stream_length_in_samples());
+        assert_eq!(on_disk.file_offset(), whole.file_offset());
+        let length = whole.stream_length_in_samples();
+        let channels = whole.info().channels;
+        let (mut ours, mut theirs) = (vec![0i16; 700 * channels], vec![0i16; 700 * channels]);
+        for target in [length / 3, 0, length - 1, length / 2] {
+            on_disk.seek(target).unwrap();
+            whole.seek(target).unwrap();
+            assert_eq!(on_disk.sample_offset(), whole.sample_offset());
+            let n = on_disk.get_samples_short_interleaved(channels, &mut ours);
+            assert_eq!(n, whole.get_samples_short_interleaved(channels, &mut theirs));
+            assert_eq!(ours[..n * channels], theirs[..n * channels], "{name} at {target}");
+            assert_eq!(on_disk.file_offset(), whole.file_offset());
+        }
+    }
+}
+
+#[test]
+fn files_opened_other_ways() {
+    let data = sound("stereo_48k_q5.ogg");
+    let (_, _, expected) = decode_memory(&data).unwrap();
+
+    // A file that is already open, and is still ours afterwards.
+    let mut file = std::fs::File::open(path("stereo_48k_q5.ogg")).unwrap();
+    {
+        let mut vorbis = Vorbis::open_file(&mut file).unwrap();
+        let mut samples = vec![0i16; expected.len() + 16];
+        assert_eq!(vorbis.get_samples_short_interleaved(2, &mut samples) * 2, expected.len());
+        assert_eq!(samples[..expected.len()], expected[..]);
+    }
+    use std::io::Seek;
+    assert!(file.stream_position().unwrap() > 0);
+
+    // A stream that starts part of the way into something larger: places in it are counted
+    // from its start.
+    let mut larger = vec![0x4fu8; 5000];
+    larger.extend_from_slice(&data);
+    larger.extend_from_slice(&[0u8; 3000]);
+    let mut inside = std::io::Cursor::new(larger);
+    inside.set_position(5000);
+    let mut vorbis = Vorbis::open_file_section(inside, data.len() as u32).unwrap();
+    let whole = Vorbis::open(&data).unwrap();
+    assert_eq!(vorbis.file_offset(), whole.file_offset());
+    assert_eq!(vorbis.stream_length_in_samples(), 48000);
+    vorbis.seek(40_000).unwrap();
+    let mut samples = vec![0i16; 2 * 100];
+    assert_eq!(vorbis.get_samples_short_interleaved(2, &mut samples), 100);
+    assert_eq!(samples[..], expected[80_000..80_200]);
+
+    // No such file; and a file that is something else.
+    assert_eq!(Vorbis::open_filename(path("no_such.ogg")).err(), Some(VorbisError::FileOpenFailure));
+    assert_eq!(decode_filename(path("no_such.ogg")).err(), Some(VorbisError::FileOpenFailure));
+    assert_eq!(Vorbis::open_filename(path("README.md")).err(), Some(VorbisError::MissingCapturePattern));
+    assert_eq!(Vorbis::open_file(std::io::Cursor::new(Vec::new())).err(), Some(VorbisError::MissingCapturePattern));
+
+    // A decoder can be handed to another thread, whichever way it was opened.
+    fn sendable<T: Send + Sync>(_: &T) {}
+    sendable(&vorbis);
+    sendable(&whole);
+    let on_disk = Vorbis::open_filename(path("mono_tiny.ogg")).unwrap();
+    let samples = std::thread::spawn(move || {
+        let mut on_disk = on_disk;
+        let mut samples = vec![0i16; 1000];
+        on_disk.get_samples_short_interleaved(1, &mut samples)
+    })
+    .join()
+    .unwrap();
+    assert_eq!(samples, 441);
+}
+
 #[test]
 fn what_is_not_a_sound() {
     assert!(Vorbis::open(&[]).is_err());
@@ -358,6 +444,19 @@ fn exercise(data: &[u8]) {
     }
     let _ = vorbis.seek_start();
     vorbis.take_error();
+
+    // As a file read through.
+    if let Ok(mut vorbis) = Vorbis::open_file(std::io::Cursor::new(data)) {
+        let length = vorbis.stream_length_in_samples();
+        let mut frames = 0;
+        while vorbis.get_samples_short_interleaved(2, &mut shorts) != 0 && frames < 4000 {
+            frames += 1;
+        }
+        for target in [length / 2, 0, length.wrapping_add(7)] {
+            let _ = vorbis.seek(target);
+            vorbis.get_frame_float();
+        }
+    }
 
     // And in pieces.
     for chunk in [data.len().max(1), 97] {

@@ -1,6 +1,7 @@
 //! The byte stream, Ogg pages and packets, and the bit reader (stb_vorbis's get8 .. prep_huffman).
 
 use crate::VorbisError;
+use std::io::{Read, Seek, SeekFrom};
 
 /// "No more bits in this packet" (stb_vorbis's EOP and INVALID_BITS).
 pub(crate) const EOP: i32 = -1;
@@ -15,10 +16,110 @@ pub(crate) struct ProbedPage {
     pub last_decoded_sample: u32,
 }
 
+/// What a decoder reads a file on disk through: anything that can be read and searched, and
+/// (so that a decoder stays something a thread can be handed) sent and shared.
+pub(crate) trait Stream: Read + Seek + Send + Sync {}
+
+impl<T: Read + Seek + Send + Sync> Stream for T {}
+
+/// A file read as it is needed: stb_vorbis's `FILE *f`, with C's `fgetc`, `fread`, `fseek`
+/// and `ftell` over it.
+pub(crate) struct FileIo<'a> {
+    file: Box<dyn Stream + 'a>,
+    /// Where the Vorbis data starts in the file (f_start).
+    start: u32,
+    /// The length the stream was opened with (stream_len): the rest of the file, or what
+    /// the caller said.
+    stream_len: u32,
+    /// The position in the file, as `ftell` gives it.
+    pos: u64,
+    /// Bytes of the file from `buffer_start` on, read ahead.
+    buffer: Vec<u8>,
+    buffer_start: u64,
+    /// Where the file itself is, when that is known.
+    file_pos: Option<u64>,
+}
+
+/// How much of a file is read at a time.
+const FILE_BUFFER: usize = 16 * 1024;
+
+impl<'a> FileIo<'a> {
+    pub fn new(file: Box<dyn Stream + 'a>, start: u32, stream_len: u32) -> FileIo<'a> {
+        FileIo { file, start, stream_len, pos: u64::from(start), buffer: Vec::new(), buffer_start: 0, file_pos: None }
+    }
+
+    /// The bytes of the buffer from the position on; reads more of the file if there are none.
+    /// Nothing at the end of the file (or where the file can't be read).
+    fn ahead(&mut self) -> &[u8] {
+        let buffered = self.pos >= self.buffer_start && self.pos - self.buffer_start < self.buffer.len() as u64;
+        if !buffered {
+            self.buffer.clear();
+            self.buffer_start = self.pos;
+            if self.file_pos != Some(self.pos) {
+                self.file_pos = self.file.seek(SeekFrom::Start(self.pos)).ok();
+            }
+            if self.file_pos == Some(self.pos) {
+                self.buffer.resize(FILE_BUFFER, 0);
+                let mut filled = 0;
+                while filled < FILE_BUFFER {
+                    match self.file.read(&mut self.buffer[filled..]) {
+                        Ok(0) => break,
+                        Ok(n) => filled += n,
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(_) => {
+                            // (As C's stdio: what could not be read is the end of the file.)
+                            self.file_pos = None;
+                            break;
+                        }
+                    }
+                }
+                self.buffer.truncate(filled);
+                if let Some(file_pos) = self.file_pos.as_mut() {
+                    *file_pos += filled as u64;
+                }
+            }
+        }
+        &self.buffer[(self.pos - self.buffer_start) as usize..]
+    }
+
+    /// `fgetc`
+    fn get8(&mut self) -> Option<u8> {
+        let byte = self.ahead().first().copied()?;
+        self.pos += 1;
+        Some(byte)
+    }
+
+    /// `fread(out, n, 1, f) == 1`: all of `out`, or as much as the file has and "failed".
+    fn getn(&mut self, out: &mut [u8]) -> bool {
+        let mut done = 0;
+        while done < out.len() {
+            let ahead = self.ahead();
+            if ahead.is_empty() {
+                return false;
+            }
+            let n = ahead.len().min(out.len() - done);
+            out[done..done + n].copy_from_slice(&ahead[..n]);
+            done += n;
+            self.pos += n as u64;
+        }
+        true
+    }
+
+    /// `fseek(f, ftell(f) + n, SEEK_SET)`, which fails and stays put before the file's start.
+    fn skip(&mut self, n: i64) {
+        if let Some(pos) = (self.pos as i64).checked_add(n).filter(|&pos| pos >= 0) {
+            self.pos = pos as u64;
+        }
+    }
+}
+
 /// Everything about where the decoder is in the file.
 pub(crate) struct Io<'a> {
-    /// The whole file, or in push mode the bytes the caller handed over this time.
+    /// The whole file, or in push mode the bytes the caller handed over this time. Empty when
+    /// the file is read from disk (`file`).
     pub data: &'a [u8],
+    /// The file, when it is read from disk as it is needed.
+    pub file: Option<FileIo<'a>>,
     /// Offset of the next byte. A skip may put it past the end.
     pub pos: usize,
     pub eof: bool,
@@ -52,6 +153,7 @@ impl<'a> Io<'a> {
     pub fn new(data: &'a [u8]) -> Io<'a> {
         Io {
             data,
+            file: None,
             pos: 0,
             eof: false,
             error: None,
@@ -81,20 +183,31 @@ impl<'a> Io<'a> {
     }
 
     pub fn stream_len(&self) -> u32 {
-        self.data.len() as u32
+        match &self.file {
+            Some(file) => file.stream_len,
+            None => self.data.len() as u32,
+        }
     }
 
+    #[inline]
     pub fn get8(&mut self) -> u8 {
         match self.data.get(self.pos) {
             Some(&byte) => {
                 self.pos += 1;
                 byte
             }
-            None => {
-                self.eof = true;
-                0
-            }
+            None => self.get8_slow(),
         }
+    }
+
+    /// The end of the bytes in memory: the end of the file, or a file on disk to read from.
+    #[cold]
+    fn get8_slow(&mut self) -> u8 {
+        if let Some(byte) = self.file.as_mut().and_then(|file| file.get8()) {
+            return byte;
+        }
+        self.eof = true;
+        0
     }
 
     pub fn get32(&mut self) -> u32 {
@@ -105,23 +218,36 @@ impl<'a> Io<'a> {
         x
     }
 
-    /// The next `n` bytes, or nothing (and end of file) if there aren't that many.
-    pub fn getn(&mut self, n: usize) -> Option<&'a [u8]> {
-        let end = self.pos.checked_add(n).filter(|&end| end <= self.data.len());
+    /// Fills `out` with the next bytes, or fails (and it is the end of the file) if there
+    /// aren't that many. From memory a failure reads nothing; from a file on disk it reads
+    /// what there is, as C's `fread` does.
+    pub fn getn(&mut self, out: &mut [u8]) -> bool {
+        if let Some(file) = self.file.as_mut() {
+            if file.getn(out) {
+                return true;
+            }
+            self.eof = true;
+            return false;
+        }
+        let end = self.pos.checked_add(out.len()).filter(|&end| end <= self.data.len());
         match end {
             Some(end) => {
-                let bytes = &self.data[self.pos..end];
+                out.copy_from_slice(&self.data[self.pos..end]);
                 self.pos = end;
-                Some(bytes)
+                true
             }
             None => {
                 self.eof = true;
-                None
+                false
             }
         }
     }
 
     pub fn skip(&mut self, n: i64) {
+        if let Some(file) = self.file.as_mut() {
+            file.skip(n);
+            return;
+        }
         self.pos = (self.pos as i64).saturating_add(n).max(0) as usize;
         if self.pos >= self.data.len() {
             self.eof = true;
@@ -133,6 +259,19 @@ impl<'a> Io<'a> {
             return false;
         }
         self.eof = false;
+        if let Some(file) = self.file.as_mut() {
+            // (C's fseek takes any place in the first 2 GB, past the end of the file too;
+            // reading there is then the end of the file.)
+            let mut loc = loc;
+            if loc.checked_add(file.start).is_none() || loc >= 0x8000_0000 {
+                loc = 0x7fff_ffff;
+                self.eof = true;
+            } else {
+                loc += file.start;
+            }
+            file.pos = u64::from(loc);
+            return true;
+        }
         if loc as usize >= self.data.len() {
             self.pos = self.data.len();
             self.eof = true;
@@ -147,6 +286,9 @@ impl<'a> Io<'a> {
         if self.push_mode {
             return 0;
         }
+        if let Some(file) = &self.file {
+            return file.pos.wrapping_sub(u64::from(file.start)) as u32;
+        }
         self.pos as u32
     }
 
@@ -155,6 +297,8 @@ impl<'a> Io<'a> {
     pub fn rebind<'b>(self, data: &'b [u8]) -> Io<'b> {
         Io {
             data,
+            // (Push mode never reads from a file on disk.)
+            file: None,
             pos: self.pos,
             eof: self.eof,
             error: self.error,
@@ -285,9 +429,11 @@ impl<'a> Io<'a> {
         // page_segments
         self.segment_count = i32::from(self.get8());
         let count = self.segment_count as usize;
-        match self.getn(count) {
-            Some(segments) => self.segments[..count].copy_from_slice(segments),
-            None => return self.error(VorbisError::UnexpectedEof),
+        let mut segments = self.segments;
+        let read = self.getn(&mut segments[..count]);
+        self.segments = segments;
+        if !read {
+            return self.error(VorbisError::UnexpectedEof);
         }
         // assume we _don't_ know the sample position of any segments
         self.end_seg_with_known_loc = -2;

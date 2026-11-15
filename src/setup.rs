@@ -324,7 +324,8 @@ pub(crate) fn start_decoder(f: &mut Io, pi: Pi) -> Result<Setup, VorbisError> {
     }
     if f.segments[0] != 30 {
         // check for the Ogg skeleton fishead identifying header to refine our error
-        if f.segments[0] == 64 && f.getn(6) == Some(&b"fishea"[..]) && f.get8() == b'd' && f.get8() == 0 {
+        let mut header = [0u8; 6];
+        if f.segments[0] == 64 && f.getn(&mut header) && &header == b"fishea" && f.get8() == b'd' && f.get8() == 0 {
             return Err(VorbisError::OggSkeletonNotSupported);
         }
         return Err(VorbisError::InvalidFirstPage);
@@ -335,8 +336,11 @@ pub(crate) fn start_decoder(f: &mut Io, pi: Pi) -> Result<Setup, VorbisError> {
     if i32::from(f.get8()) != VORBIS_PACKET_ID {
         return Err(VorbisError::InvalidFirstPage);
     }
-    let Some(header) = f.getn(6) else { return Err(VorbisError::UnexpectedEof) };
-    if !vorbis_validate(header) {
+    let mut header = [0u8; 6];
+    if !f.getn(&mut header) {
+        return Err(VorbisError::UnexpectedEof);
+    }
+    if !vorbis_validate(&header) {
         return Err(VorbisError::InvalidFirstPage);
     }
     // vorbis_version

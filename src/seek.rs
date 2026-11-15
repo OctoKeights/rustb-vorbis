@@ -132,11 +132,18 @@ impl Vorbis<'_> {
         // record where the page starts
         // parse the header
         // (stb_vorbis goes on with whatever its buffers held when the file ends here.)
-        let header = f.getn(27)?;
+        let mut header = [0u8; 27];
+        if !f.getn(&mut header) {
+            return None;
+        }
         if header[..4] != OGG_PAGE_HEADER {
             return None;
         }
-        let lacing = f.getn(usize::from(header[26]))?;
+        let mut lacing = [0u8; 255];
+        let lacing = &mut lacing[..usize::from(header[26])];
+        if !f.getn(lacing) {
+            return None;
+        }
 
         // determine the length of the payload
         let len: u32 = lacing.iter().map(|&segment| u32::from(segment)).sum();
@@ -536,7 +543,7 @@ impl Vorbis<'_> {
         self.io.set_file_offset(last_page_loc);
 
         // parse the header
-        self.io.getn(6);
+        self.io.getn(&mut [0u8; 6]);
         // extract the absolute granule position
         let mut lo = self.io.get32();
         let hi = self.io.get32();

@@ -20,14 +20,13 @@
 //!
 //! Both of stb_vorbis's APIs are here:
 //!
-//! - [`Vorbis`], its "pull" API on a file held in memory: opening, the stream's information
-//!   and comments, decoding by frame or by any number of samples as floats or 16-bit integers
-//!   (with its down-mix to mono and stereo), seeking, and the stream's length.
+//! - [`Vorbis`], its "pull" API: opening, the stream's information and comments, decoding by
+//!   frame or by any number of samples as floats or 16-bit integers (with its down-mix to mono
+//!   and stereo), seeking, and the stream's length. The file is either held in memory
+//!   ([`Vorbis::open`]) or read from disk as it is decoded ([`Vorbis::open_filename`],
+//!   [`Vorbis::open_file`], [`Vorbis::open_file_section`]).
 //! - [`VorbisPush`], its "push" API: the decoder is handed the file a piece at a time, as the
 //!   bytes arrive, and gives a frame whenever it has the whole of one.
-//!
-//! Reading from a file on disk (stb_vorbis's `FILE*` functions) is not: read the file, or
-//! hand it to [`VorbisPush`] as it is read.
 //!
 //! Like stb_vorbis, it does not decode floor 0 (found in old files, from before 2004), reads
 //! only the first logical stream of a file, and does not check page checksums while decoding.
@@ -52,8 +51,10 @@ mod seek;
 mod setup;
 mod tables;
 
-use io::{Io, ProbedPage};
+use io::{FileIo, Io, ProbedPage};
 use setup::Setup;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 
 pub use push::{PushFrame, VorbisPush};
 
@@ -73,7 +74,7 @@ pub enum VorbisError {
     FeatureNotSupported = 4,
     /// More than [`MAX_CHANNELS`] channels.
     TooManyChannels = 5,
-    /// The file could not be opened. Here: it is larger than 2 GB.
+    /// The file could not be opened (or, handed over in memory, is larger than 2 GB).
     FileOpenFailure = 6,
     /// Can't seek in a file of unknown length.
     SeekWithoutLength = 7,
@@ -159,6 +160,21 @@ pub enum Pi {
     FloatCpp,
 }
 
+impl Vorbis<'static> {
+    /// Opens an Ogg Vorbis file on disk by its name (`stb_vorbis_open_filename`). The file is
+    /// read as it is decoded, not all at once, so a long file takes no more memory than a
+    /// short one. [`VorbisError::FileOpenFailure`] if it can't be opened.
+    pub fn open_filename<P: AsRef<Path>>(filename: P) -> Result<Vorbis<'static>, VorbisError> {
+        Vorbis::open_filename_with_pi(filename, Pi::default())
+    }
+
+    /// [`Vorbis::open_filename`], for the samples of one build of stb_vorbis or another.
+    pub fn open_filename_with_pi<P: AsRef<Path>>(filename: P, pi: Pi) -> Result<Vorbis<'static>, VorbisError> {
+        let file = std::fs::File::open(filename).map_err(|_| VorbisError::FileOpenFailure)?;
+        Vorbis::open_file_with_pi(file, pi)
+    }
+}
+
 /// What a stream is (stb_vorbis_info, without its memory figures).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VorbisInfo {
@@ -208,6 +224,50 @@ impl<'a> Vorbis<'a> {
             return Err(VorbisError::FileOpenFailure);
         }
         let mut io = Io::new(data);
+        let setup = setup::start_decoder(&mut io, pi)?;
+        let mut vorbis = Vorbis::assemble(io, setup);
+        vorbis.vorbis_pump_first_frame();
+        Ok(vorbis)
+    }
+
+    /// Opens an Ogg Vorbis file that is read from disk as it is decoded
+    /// (`stb_vorbis_open_file`): the stream is what `file` holds from where it is now to its
+    /// end.
+    ///
+    /// `file` is anything that can be read and searched, a [`std::fs::File`] before all; the
+    /// decoder keeps it, and reads it a few kilobytes at a time. Hand over `&mut file` to
+    /// have it back afterwards (stb_vorbis's `close_handle_on_close` set to 0).
+    pub fn open_file<R: Read + Seek + Send + Sync + 'a>(file: R) -> Result<Vorbis<'a>, VorbisError> {
+        Vorbis::open_file_with_pi(file, Pi::default())
+    }
+
+    /// [`Vorbis::open_file`], for the samples of one build of stb_vorbis or another.
+    pub fn open_file_with_pi<R: Read + Seek + Send + Sync + 'a>(mut file: R, pi: Pi) -> Result<Vorbis<'a>, VorbisError> {
+        let length = (|| {
+            let start = file.stream_position()?;
+            let end = file.seek(SeekFrom::End(0))?;
+            file.seek(SeekFrom::Start(start))?;
+            // (stb_vorbis keeps the length in 32 bits.)
+            Ok::<u32, std::io::Error>(end.wrapping_sub(start) as u32)
+        })()
+        .map_err(|_| VorbisError::FileOpenFailure)?;
+        Vorbis::open_file_section_with_pi(file, length, pi)
+    }
+
+    /// Opens an Ogg Vorbis stream that is a part of a file on disk
+    /// (`stb_vorbis_open_file_section`): it starts where `file` is now and is `length` bytes
+    /// long. The length is what looking for the end of the stream goes by (its length in
+    /// samples, and seeking); decoding goes on for as long as there are pages.
+    pub fn open_file_section<R: Read + Seek + Send + Sync + 'a>(file: R, length: u32) -> Result<Vorbis<'a>, VorbisError> {
+        Vorbis::open_file_section_with_pi(file, length, Pi::default())
+    }
+
+    /// [`Vorbis::open_file_section`], for the samples of one build of stb_vorbis or another.
+    pub fn open_file_section_with_pi<R: Read + Seek + Send + Sync + 'a>(mut file: R, length: u32, pi: Pi) -> Result<Vorbis<'a>, VorbisError> {
+        // (stb_vorbis keeps where the stream starts in 32 bits.)
+        let start = file.stream_position().ok().and_then(|start| u32::try_from(start).ok()).ok_or(VorbisError::FileOpenFailure)?;
+        let mut io = Io::new(&[]);
+        io.file = Some(FileIo::new(Box::new(file), start, length));
         let setup = setup::start_decoder(&mut io, pi)?;
         let mut vorbis = Vorbis::assemble(io, setup);
         vorbis.vorbis_pump_first_frame();
@@ -487,7 +547,22 @@ pub fn decode_memory(data: &[u8]) -> Result<(usize, u32, Vec<i16>), VorbisError>
 
 /// [`decode_memory`], for the samples of one build of stb_vorbis or the other.
 pub fn decode_memory_with_pi(data: &[u8], pi: Pi) -> Result<(usize, u32, Vec<i16>), VorbisError> {
-    let mut vorbis = Vorbis::open_with_pi(data, pi)?;
+    Ok(decode_all(Vorbis::open_with_pi(data, pi)?))
+}
+
+/// Decodes a whole file on disk to interleaved 16-bit samples (`stb_vorbis_decode_filename`):
+/// `(channels, sample rate, samples)`.
+pub fn decode_filename<P: AsRef<Path>>(filename: P) -> Result<(usize, u32, Vec<i16>), VorbisError> {
+    decode_filename_with_pi(filename, Pi::default())
+}
+
+/// [`decode_filename`], for the samples of one build of stb_vorbis or the other.
+pub fn decode_filename_with_pi<P: AsRef<Path>>(filename: P, pi: Pi) -> Result<(usize, u32, Vec<i16>), VorbisError> {
+    Ok(decode_all(Vorbis::open_filename_with_pi(filename, pi)?))
+}
+
+/// Everything a decoder has, from where it is to the end.
+fn decode_all(mut vorbis: Vorbis) -> (usize, u32, Vec<i16>) {
     let info = vorbis.info();
     let limit = info.channels * 4096;
     let mut samples = vec![0i16; limit];
@@ -503,5 +578,5 @@ pub fn decode_memory_with_pi(data: &[u8], pi: Pi) -> Result<(usize, u32, Vec<i16
         }
     }
     samples.truncate(offset);
-    Ok((info.channels, info.sample_rate, samples))
+    (info.channels, info.sample_rate, samples)
 }
