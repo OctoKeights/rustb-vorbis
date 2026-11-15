@@ -20,11 +20,10 @@ const BUFFER_SIZE: usize = 32;
 pub(crate) fn float_to_i16(x: f32) -> i16 {
     const MAGIC: f32 = 1.5f32 * (1 << (23 - 15)) as f32 + 0.5f32 / (1 << 15) as f32;
     const ADDEND: i32 = ((150 - 15) << 23) + (1 << 22);
-    let mut v = ((x + MAGIC).to_bits() as i32).wrapping_sub(ADDEND);
-    if v.wrapping_add(32768) as u32 > 65535 {
-        v = if v < 0 { -32768 } else { 32767 };
-    }
-    v as i16
+    let v = ((x + MAGIC).to_bits() as i32).wrapping_sub(ADDEND);
+    // (stb_vorbis: if ((unsigned int) (v + 32768) > 65535) v = v < 0 ? -32768 : 32767; said
+    // this way, a compiler can convert several samples at a time.)
+    v.clamp(-32768, 32767) as i16
 }
 
 fn copy_samples(dest: &mut [i16], src: &[f32]) {
@@ -45,14 +44,12 @@ fn compute_samples(mask: i8, output: &mut [i16], num_c: usize, data: &[Vec<f32>]
         }
         for j in 0..num_c {
             if CHANNEL_POSITION[num_c][j] & mask != 0 {
-                for i in 0..n {
-                    buffer[i] += data[j][d_offset + o + i];
+                for (sum, &sample) in buffer[..n].iter_mut().zip(&data[j][d_offset + o..][..n]) {
+                    *sum += sample;
                 }
             }
         }
-        for i in 0..n {
-            output[o + i] = float_to_i16(buffer[i]);
-        }
+        copy_samples(&mut output[o..o + n], &buffer[..n]);
         o += BUFFER_SIZE;
     }
 }
@@ -72,24 +69,19 @@ fn compute_stereo_samples(output: &mut [i16], num_c: usize, data: &[Vec<f32>], d
         }
         for j in 0..num_c {
             let m = CHANNEL_POSITION[num_c][j] & (PLAYBACK_LEFT | PLAYBACK_RIGHT);
-            if m == (PLAYBACK_LEFT | PLAYBACK_RIGHT) {
-                for i in 0..n {
-                    buffer[i * 2] += data[j][d_offset + o + i];
-                    buffer[i * 2 + 1] += data[j][d_offset + o + i];
+            if m == 0 {
+                continue;
+            }
+            for (pair, &sample) in buffer.chunks_exact_mut(2).zip(&data[j][d_offset + o..][..n]) {
+                if m & PLAYBACK_LEFT != 0 {
+                    pair[0] += sample;
                 }
-            } else if m == PLAYBACK_LEFT {
-                for i in 0..n {
-                    buffer[i * 2] += data[j][d_offset + o + i];
-                }
-            } else if m == PLAYBACK_RIGHT {
-                for i in 0..n {
-                    buffer[i * 2 + 1] += data[j][d_offset + o + i];
+                if m & PLAYBACK_RIGHT != 0 {
+                    pair[1] += sample;
                 }
             }
         }
-        for i in 0..(n << 1) {
-            output[o2 + i] = float_to_i16(buffer[i]);
-        }
+        copy_samples(&mut output[o2..o2 + (n << 1)], &buffer[..n << 1]);
         o += BUFFER_SIZE >> 1;
     }
 }
@@ -126,15 +118,28 @@ pub(crate) fn convert_channels_short_interleaved(buf_c: usize, buffer: &mut [i16
         }
     } else {
         let limit = buf_c.min(data_c);
-        let mut at = 0usize;
-        for j in 0..len {
-            for channel in data.iter().take(limit) {
-                buffer[at] = float_to_i16(channel[d_offset + j]);
-                at += 1;
+        let buffer = &mut buffer[..len * buf_c];
+        match (buf_c, &data[..limit]) {
+            // One channel and two, which is nearly all sound, each as one run over the samples.
+            (1, [only]) => copy_samples(buffer, &only[d_offset..d_offset + len]),
+            (2, [left, right]) => {
+                let (left, right) = (&left[d_offset..d_offset + len], &right[d_offset..d_offset + len]);
+                for (pair, (&left, &right)) in buffer.chunks_exact_mut(2).zip(left.iter().zip(right)) {
+                    pair[0] = float_to_i16(left);
+                    pair[1] = float_to_i16(right);
+                }
             }
-            for _ in limit..buf_c {
-                buffer[at] = 0;
-                at += 1;
+            (_, channels) => {
+                if buf_c == 0 {
+                    return;
+                }
+                for (j, frame) in buffer.chunks_exact_mut(buf_c).enumerate() {
+                    let (decoded, silent) = frame.split_at_mut(limit);
+                    for (out, channel) in decoded.iter_mut().zip(channels) {
+                        *out = float_to_i16(channel[d_offset + j]);
+                    }
+                    silent.fill(0);
+                }
             }
         }
     }
