@@ -26,7 +26,7 @@ fn draw_line(output: &mut [f32], x0: i32, y0: i32, mut x1: i32, y1: i32, n: i32)
     let dy = y1 - y0;
     let adx = x1 - x0;
     let mut ady = dy.abs();
-    let mut x = x0;
+    let x = x0;
     let mut y = y0;
     let mut err = 0;
     let base = dy / adx;
@@ -36,18 +36,15 @@ fn draw_line(output: &mut [f32], x0: i32, y0: i32, mut x1: i32, y1: i32, n: i32)
         x1 = n;
     }
     if x < x1 {
-        output[x as usize] *= INVERSE_DB_TABLE[(y & 255) as usize];
-        x += 1;
-        while x < x1 {
+        let Some((first, rest)) = output[x as usize..x1 as usize].split_first_mut() else { return };
+        *first *= INVERSE_DB_TABLE[(y & 255) as usize];
+        for value in rest {
             err += ady;
-            if err >= adx {
-                err -= adx;
-                y += sy;
-            } else {
-                y += base;
-            }
-            output[x as usize] *= INVERSE_DB_TABLE[(y & 255) as usize];
-            x += 1;
+            // (Written as two choices and not as a branch, which would be a guess each time.)
+            let over = err >= adx;
+            err -= if over { adx } else { 0 };
+            y += if over { sy } else { base };
+            *value *= INVERSE_DB_TABLE[(y & 255) as usize];
         }
     }
 }
@@ -72,8 +69,9 @@ fn do_floor(g: &Floor1, n: usize, target: &mut [f32], final_y: &[i16]) {
     }
     if lx < n2 {
         // optimization of: draw_line(target, lx,ly, n,ly, n2);
-        for j in lx..n2 {
-            target[j as usize] *= INVERSE_DB_TABLE[(ly & 255) as usize];
+        let level = INVERSE_DB_TABLE[(ly & 255) as usize];
+        for value in &mut target[lx as usize..n2 as usize] {
+            *value *= level;
         }
     }
 }
@@ -404,25 +402,21 @@ impl Vorbis<'_> {
         // INVERSE COUPLING
         for i in (0..usize::from(map.coupling_steps)).rev() {
             let (m, a) = two_channels(channel_buffers, usize::from(map.chan[i].magnitude), usize::from(map.chan[i].angle));
-            for j in 0..n2 {
-                let (m2, a2);
-                if m[j] > 0.0 {
-                    if a[j] > 0.0 {
-                        m2 = m[j];
-                        a2 = m[j] - a[j];
-                    } else {
-                        a2 = m[j];
-                        m2 = m[j] + a[j];
-                    }
-                } else if a[j] > 0.0 {
-                    m2 = m[j];
-                    a2 = m[j] + a[j];
-                } else {
-                    a2 = m[j];
-                    m2 = m[j] - a[j];
-                }
-                m[j] = m2;
-                a[j] = a2;
+            // stb_vorbis's four cases, as two choices: which of the difference and the sum is
+            // the new value, and which of the two channels it goes to. The other channel gets
+            // the magnitude. (Choices and not branches, so that the samples can be done several
+            // at a time.)
+            //
+            //     m > 0, a > 0:   m2 = m      a2 = m - a
+            //     m > 0, a <= 0:  m2 = m + a  a2 = m
+            //     m <= 0, a > 0:  m2 = m      a2 = m + a
+            //     m <= 0, a <= 0: m2 = m - a  a2 = m
+            for (m, a) in m[..n2].iter_mut().zip(&mut a[..n2]) {
+                let (magnitude, angle) = (*m, *a);
+                let other = if (magnitude > 0.0) == (angle > 0.0) { magnitude - angle } else { magnitude + angle };
+                let to_angle = angle > 0.0;
+                *m = if to_angle { magnitude } else { other };
+                *a = if to_angle { other } else { magnitude };
             }
         }
 
@@ -533,12 +527,14 @@ impl Vorbis<'_> {
             } else {
                 return 0;
             };
-            let (n, left) = (n as usize, left as usize);
-            for i in 0..self.setup.channels {
-                let buffer = &mut self.channel_buffers[i];
-                let previous = &self.previous_window[i];
-                for j in 0..n {
-                    buffer[left + j] = buffer[left + j] * w[j] + previous[j] * w[n - 1 - j];
+            let (n, left) = (n as usize, left.max(0) as usize);
+            let w = &w[..n.min(w.len())];
+            for (buffer, previous) in self.channel_buffers.iter_mut().zip(&self.previous_window) {
+                // (buffer[left + j] = buffer[left + j] * w[j] + previous[j] * w[n - 1 - j],
+                // for the n values from `left` on.)
+                let buffer = buffer.get_mut(left..).unwrap_or_default();
+                for ((value, &before), (&rising, &falling)) in buffer.iter_mut().zip(previous).zip(w.iter().zip(w.iter().rev())) {
+                    *value = *value * rising + before * falling;
                 }
             }
         }
@@ -554,12 +550,11 @@ impl Vorbis<'_> {
         // channel_buffers couldn't be temp mem (although they're NOT
         // currently temp mem, they could be (unless we want to level
         // performance by spreading out the computation))
-        for i in 0..self.setup.channels {
-            let mut j = 0;
-            while right + j < len {
-                self.previous_window[i][j as usize] = self.channel_buffers[i][(right + j) as usize];
-                j += 1;
-            }
+        for (previous, buffer) in self.previous_window.iter_mut().zip(&self.channel_buffers) {
+            // (previous[j] = buffer[right + j], for the values from `right` up to `len`.)
+            let kept = buffer.get(right.max(0) as usize..len.max(0) as usize).unwrap_or_default();
+            let count = kept.len().min(previous.len());
+            previous[..count].copy_from_slice(&kept[..count]);
         }
 
         if prev == 0 {
