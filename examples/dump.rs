@@ -7,7 +7,7 @@
 //! `--float-pi`: as stb_vorbis built without the C library's M_PI; `--float-pi-cpp`: and as
 //! C++ (see `Pi`).
 
-use rustb_vorbis::{decode_memory_with_pi, Pi, Vorbis, VorbisError, VorbisPush};
+use rustb_vorbis::{decode_filename_with_pi, decode_memory_with_pi, Pi, Vorbis, VorbisError, VorbisPush};
 use std::io::Write;
 
 /// FNV-1a, 64 bits.
@@ -271,6 +271,63 @@ fn push(data: &[u8], chunk: usize, pi: Pi, out: &mut Vec<u8>) {
     }
 }
 
+/// A decoder that reads a file on disk as it goes: what it is, its length, all its samples,
+/// and a few seeks. `label` says how it was opened.
+fn disk(opened: Result<Vorbis, VorbisError>, label: &str, out: &mut Vec<u8>) {
+    let mut vorbis = match opened {
+        Ok(vorbis) => vorbis,
+        Err(error) => {
+            let _ = writeln!(out, "{label} open error {}", error.code());
+            return;
+        }
+    };
+    let info = vorbis.info();
+    let channels = info.channels;
+    let _ = writeln!(out, "{label} info {} {} {} {}", info.channels, info.sample_rate, info.max_frame_size, state(&mut vorbis));
+    let length = vorbis.stream_length_in_samples();
+    let _ = writeln!(out, "{label} length {} {:08x} {}", length, vorbis.stream_length_in_seconds().to_bits(), state(&mut vorbis));
+    let _ = writeln!(out, "{label} short {} {}", short_interleaved(&mut vorbis, channels, 4096), state(&mut vorbis));
+
+    for target in [length / 2, 0, length, length / 7 * 5, length.wrapping_add(1)] {
+        let ok = vorbis.seek(target).is_ok() as u8;
+        let at = state(&mut vorbis);
+        let mut buffer = vec![0i16; 300 * channels];
+        let n = vorbis.get_samples_short_interleaved(channels, &mut buffer);
+        let mut hash = Hash::new();
+        hash.shorts(&buffer[..n * channels]);
+        let _ = writeln!(out, "{label} seek {target} {ok} {at} {n} {:016x} {}", hash.0, state(&mut vorbis));
+    }
+    let _ = writeln!(out, "{label} start {} {}", vorbis.seek_start().is_ok() as u8, state(&mut vorbis));
+    let _ = writeln!(out, "{label} frames {} {}", frames_float(&mut vorbis, channels), state(&mut vorbis));
+}
+
+/// The functions for a file on disk: by its name; from a place inside a larger file; and as a
+/// stream said to be half as long as it is.
+fn disk_all(path: &str, data: &[u8], pi: Pi, out: &mut Vec<u8>) {
+    disk(Vorbis::open_filename_with_pi(path, pi), "disk", out);
+
+    match decode_filename_with_pi(path, pi) {
+        Ok((channels, sample_rate, samples)) => {
+            let mut hash = Hash::new();
+            hash.shorts(&samples);
+            let _ = writeln!(out, "disk whole {} {} {} {:016x}", channels, sample_rate, samples.len() / channels.max(1), hash.0);
+        }
+        Err(_) => {
+            let _ = writeln!(out, "disk whole error");
+        }
+    }
+
+    // (Bytes that are not Ogg, with what an Ogg page starts with here and there. dump.c writes
+    // the same to a temporary file; something in memory that reads like a file does here.)
+    let mut inside: Vec<u8> = (0..1234usize).map(|i| if i % 5 == 0 { 0x4f } else { (i * 7) as u8 }).collect();
+    inside.extend_from_slice(data);
+    let mut file = std::io::Cursor::new(inside);
+    file.set_position(1234);
+    disk(Vorbis::open_file_with_pi(&mut file, pi), "inside", out);
+    file.set_position(1234);
+    disk(Vorbis::open_file_section_with_pi(&mut file, (data.len() / 2) as u32, pi), "half", out);
+}
+
 /// Everything about one file, as text.
 pub fn dump(path: &str, pi: Pi, out: &mut Vec<u8>) {
     let _ = writeln!(out, "file {}", path.rsplit(['/', '\\']).next().unwrap_or(path));
@@ -380,6 +437,8 @@ pub fn dump(path: &str, pi: Pi, out: &mut Vec<u8>) {
     if data.len() <= 20000 {
         push(&data, 1, pi, out);
     }
+
+    disk_all(path, &data, pi, out);
 }
 
 fn main() {

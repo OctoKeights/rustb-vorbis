@@ -1,6 +1,6 @@
-/* Prints what stb_vorbis makes of Ogg Vorbis files, through every function of its pull API and
- * of its push API, in the same form as examples/dump.rs does with the Rust port. compare.sh
- * runs both and compares them.
+/* Prints what stb_vorbis makes of Ogg Vorbis files, through every function of its pull API
+ * (on a file in memory and on a file on disk) and of its push API, in the same form as
+ * examples/dump.rs does with the Rust port. compare.sh runs both and compares them.
  *
  *   cc -O2 [-DFLOAT_PI] -I <folder with stb_vorbis.c> dump.c -lm -o dump
  *   ./dump <file.ogg>...
@@ -21,7 +21,6 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#define STB_VORBIS_NO_STDIO
 #include "stb_vorbis.c"
 
 #include <stdint.h>
@@ -301,6 +300,94 @@ static void push(const unsigned char *data, int size, int chunk)
    stb_vorbis_close(v);
 }
 
+/* A decoder that reads a file on disk as it goes: what it is, its length, all its samples, and
+   a few seeks. `label` says how it was opened. */
+static void disk(stb_vorbis *v, int error, const char *label)
+{
+   stb_vorbis_info info;
+   uint64_t hash;
+   unsigned int length, targets[5];
+   float seconds;
+   char text[128], at[96];
+   int k;
+
+   if (!v) {
+      printf("%s open error %d\n", label, error);
+      return;
+   }
+   info = stb_vorbis_get_info(v);
+   printf("%s info %d %u %d %s\n", label, info.channels, info.sample_rate, info.max_frame_size, state(v));
+   length = stb_vorbis_stream_length_in_samples(v);
+   seconds = stb_vorbis_stream_length_in_seconds(v);
+   hash = 0;
+   memcpy(&hash, &seconds, 4);
+   printf("%s length %u %08x %s\n", label, length, (unsigned int) hash, state(v));
+   short_interleaved(v, info.channels, 4096, text);
+   printf("%s short %s %s\n", label, text, state(v));
+
+   targets[0] = length / 2;
+   targets[1] = 0;
+   targets[2] = length;
+   targets[3] = length / 7 * 5;
+   targets[4] = length + 1;
+   for (k = 0; k < 5; ++k) {
+      short *buffer = (short *) calloc((size_t) 300 * info.channels, sizeof(short));
+      int ok = stb_vorbis_seek(v, targets[k]);
+      int n;
+      strcpy(at, state(v));
+      n = stb_vorbis_get_samples_short_interleaved(v, info.channels, buffer, 300 * info.channels);
+      hash = hash_new();
+      hash_shorts(&hash, buffer, (size_t) n * info.channels);
+      printf("%s seek %u %d %s %d %016llx %s\n", label, targets[k], ok, at, n, (unsigned long long) hash, state(v));
+      free(buffer);
+   }
+   k = stb_vorbis_seek_start(v);
+   printf("%s start %d %s\n", label, k, state(v));
+   frames_float(v, info.channels, text);
+   printf("%s frames %s %s\n", label, text, state(v));
+   stb_vorbis_close(v);
+}
+
+/* The functions for a file on disk: by its name; from a place inside a larger file; and as a
+   stream said to be half as long as it is. */
+static void disk_all(const char *path, const unsigned char *data, long size)
+{
+   static unsigned char before[1234];
+   int error = 0, channels = 0, rate = 0, frames, i;
+   short *samples = NULL;
+   FILE *file;
+
+   disk(stb_vorbis_open_filename(path, &error, NULL), error, "disk");
+
+   frames = stb_vorbis_decode_filename(path, &channels, &rate, &samples);
+   if (frames < 0) {
+      printf("disk whole error\n");
+   } else {
+      uint64_t hash = hash_new();
+      hash_shorts(&hash, samples, (size_t) frames * channels);
+      printf("disk whole %d %d %d %016llx\n", channels, rate, frames, (unsigned long long) hash);
+      free(samples);
+   }
+
+   /* (Bytes that are not Ogg, with what an Ogg page starts with here and there.) */
+   for (i = 0; i < 1234; ++i)
+      before[i] = (unsigned char) (i % 5 == 0 ? 0x4f : i * 7);
+   file = tmpfile();
+   if (!file) {
+      printf("no temporary file\n");
+      return;
+   }
+   fwrite(before, 1, sizeof(before), file);
+   fwrite(data, 1, (size_t) size, file);
+   fseek(file, (long) sizeof(before), SEEK_SET);
+   error = 0;
+   disk(stb_vorbis_open_file(file, 0, &error, NULL), error, "inside");
+   fseek(file, (long) sizeof(before), SEEK_SET);
+   error = 0;
+   disk(stb_vorbis_open_file_section(file, 0, &error, NULL, (unsigned int) (size / 2)), error, "half");
+   fclose(file);
+}
+
 static void dump(const char *path)
 {
    const char *name = path, *p;
@@ -465,6 +552,8 @@ static void dump(const char *path)
    /* (A byte at a time, where that doesn't take all day.) */
    if (size <= 20000)
       push(data, (int) size, 1);
+
+   disk_all(path, data, size);
    free(data);
 }
 

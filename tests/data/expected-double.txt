@@ -69,6 +69,37 @@ push 1 flush 0 5272 3 0 b4c99fa04883e4f1 at 5237 1856
 push 1 flush 4253 17013 0 -2 0f44464514865874 at 12758 -1
 push 1 flush 6397 12725 0 -2 a4003503fcb09674 at 12758 -1
 push 1 flush 11165 3189 0 -2 f91ddcf18cd3c874 at 12758 -1
+disk info 8 44100 1024 at 0 4015 error 0
+disk length 17640 3ecccccd at 0 4015 error 0
+disk short 17640 9b2031b76eb22bfd at 17640 12761 error 0
+disk seek 8820 1 at 8896 8080 error 0 300 039954e91d09e7f7 at 9920 8485 error 0
+disk seek 0 1 at 0 4015 error 0 300 72fc9abbb93929b7 at 704 4828 error 0
+disk seek 17640 1 at 17640 12761 error 0 0 cbf29ce484222325 at 17640 12761 error 0
+disk seek 12600 1 at 12992 9713 error 0 300 ba7b28e5438cd679 at 12992 9713 error 0
+disk seek 17641 0 at 12992 9713 error 11 300 ccb90f71432dac9a at 14016 10125 error 0
+disk start 1 at 0 4015 error 0
+disk frames 19 17640 db2633bc9f124de2 at 17640 12761 error 0
+disk whole 8 44100 17640 9b2031b76eb22bfd
+inside info 8 44100 1024 at 0 4015 error 0
+inside length 17640 3ecccccd at 0 4015 error 0
+inside short 17640 9b2031b76eb22bfd at 17640 12761 error 0
+inside seek 8820 1 at 8896 8080 error 0 300 039954e91d09e7f7 at 9920 8485 error 0
+inside seek 0 1 at 0 4015 error 0 300 72fc9abbb93929b7 at 704 4828 error 0
+inside seek 17640 1 at 17640 12761 error 0 0 cbf29ce484222325 at 17640 12761 error 0
+inside seek 12600 1 at 12992 9713 error 0 300 ba7b28e5438cd679 at 12992 9713 error 0
+inside seek 17641 0 at 12992 9713 error 11 300 ccb90f71432dac9a at 14016 10125 error 0
+inside start 1 at 0 4015 error 0
+inside frames 19 17640 db2633bc9f124de2 at 17640 12761 error 0
+half info 8 44100 1024 at 0 4015 error 0
+half length 17640 3ecccccd at 0 4015 error 0
+half short 17640 9b2031b76eb22bfd at 17640 12761 error 0
+half seek 8820 1 at 8896 8080 error 0 300 039954e91d09e7f7 at 9920 8485 error 0
+half seek 0 1 at 0 4015 error 0 300 72fc9abbb93929b7 at 704 4828 error 0
+half seek 17640 1 at 17640 12761 error 0 0 cbf29ce484222325 at 17640 12761 error 0
+half seek 12600 1 at 12992 9713 error 0 300 ba7b28e5438cd679 at 12992 9713 error 0
+half seek 17641 0 at 12992 9713 error 11 300 ccb90f71432dac9a at 14016 10125 error 0
+half start 1 at 0 4015 error 0
+half frames 19 17640 db2633bc9f124de2 at 17640 12761 error 0
 file mono_44k_q2.ogg
 info 1 44100 1024
 comments 13 1 20f814a816f6ed67
@@ -140,6 +171,37 @@ push 1 flush 0 3537 3 0 63d70068287cbdd4 at 3502 2752
 push 1 flush 1830 7247 0 -2 1a3f7dae13c1cb1d at 5488 -1
 push 1 flush 2762 5383 0 -2 8a58b000d202b2dd at 5488 -1
 push 1 flush 4802 1375 0 -2 b5ba8e750291ee15 at 5488 -1
+disk info 1 44100 1024 at 0 3351 error 0
+disk length 44100 3f800000 at 0 3351 error 0
+disk short 44100 a61d9418c42a2881 at 44100 5491 error 0
+disk seek 22050 1 at 22080 4354 error 0 300 cf401828187735a0 at 23104 4400 error 0
+disk seek 0 1 at 0 3351 error 0 300 0853aa44e85e5f3a at 576 3417 error 0
+disk seek 44100 1 at 44100 5491 error 0 0 cbf29ce484222325 at 44100 5491 error 0
+disk seek 31500 1 at 32320 4813 error 0 300 ef664f3db501c7f3 at 32320 4813 error 0
+disk seek 44101 0 at 32320 4813 error 11 300 9a6849fd399392e5 at 32320 4813 error 0
+disk start 1 at 0 3351 error 0
+disk frames 44 44100 5e23d06b18173451 at 44100 5491 error 0
+disk whole 1 44100 44100 a61d9418c42a2881
+inside info 1 44100 1024 at 0 3351 error 0
+inside length 44100 3f800000 at 0 3351 error 0
+inside short 44100 a61d9418c42a2881 at 44100 5491 error 0
+inside seek 22050 1 at 22080 4354 error 0 300 cf401828187735a0 at 23104 4400 error 0
+inside seek 0 1 at 0 3351 error 0 300 0853aa44e85e5f3a at 576 3417 error 0
+inside seek 44100 1 at 44100 5491 error 0 0 cbf29ce484222325 at 44100 5491 error 0
+inside seek 31500 1 at 32320 4813 error 0 300 ef664f3db501c7f3 at 32320 4813 error 0
+inside seek 44101 0 at 32320 4813 error 11 300 9a6849fd399392e5 at 32320 4813 error 0
+inside start 1 at 0 3351 error 0
+inside frames 44 44100 5e23d06b18173451 at 44100 5491 error 0
+half info 1 44100 1024 at 0 3351 error 0
+half length 0 00000000 at 0 3351 error 36
+half short 44100 a61d9418c42a2881 at 44100 5491 error 0
+half seek 0 0 at 44100 5491 error 7 0 cbf29ce484222325 at 44100 5491 error 0
+half seek 0 0 at 44100 5491 error 7 0 cbf29ce484222325 at 44100 5491 error 0
+half seek 0 0 at 44100 5491 error 7 0 cbf29ce484222325 at 44100 5491 error 0
+half seek 0 0 at 44100 5491 error 7 0 cbf29ce484222325 at 44100 5491 error 0
+half seek 1 0 at 44100 5491 error 7 0 cbf29ce484222325 at 44100 5491 error 0
+half start 1 at 0 3351 error 0
+half frames 44 44100 5e23d06b18173451 at 44100 5491 error 0
 file mono_long.ogg
 info 1 44100 1024
 comments 13 1 20f814a816f6ed67
@@ -205,6 +267,37 @@ push 61 flush 0 71 3 0 cc4b4942fdd0e76b at 3956 1856
 push 61 flush 63782 337 3 495296 7e66025d92c897a8 at 74274 499392
 push 61 flush 95691 339 3 720576 ed4aaac1f460989d at 106230 724672
 push 61 flush 167426 299 3 1216192 7ebcc0e123205421 at 176758 1220288
+disk info 1 44100 1024 at 0 3634 error 0
+disk length 1323000 41f00000 at 0 3634 error 0
+disk short 1323000 939043403d81ccbe at 1323000 191348 error 0
+disk seek 661500 1 at 662208 97318 error 0 300 7345f58bdd727bc3 at 662208 97318 error 0
+disk seek 0 1 at 0 3634 error 0 300 5c404336d3635b5a at 704 3808 error 0
+disk seek 1323000 1 at 1323000 191348 error 0 0 cbf29ce484222325 at 1323000 191348 error 0
+disk seek 945000 1 at 945856 137676 error 0 300 d572a66f09799bc2 at 945856 137676 error 0
+disk seek 1323001 0 at 945856 137676 error 11 300 65fa0f999cedf99a at 945856 137676 error 0
+disk start 1 at 0 3634 error 0
+disk frames 1299 1323000 b506946e8e91c115 at 1323000 191348 error 0
+disk whole 1 44100 1323000 939043403d81ccbe
+inside info 1 44100 1024 at 0 3634 error 0
+inside length 1323000 41f00000 at 0 3634 error 0
+inside short 1323000 939043403d81ccbe at 1323000 191348 error 0
+inside seek 661500 1 at 662208 97318 error 0 300 7345f58bdd727bc3 at 662208 97318 error 0
+inside seek 0 1 at 0 3634 error 0 300 5c404336d3635b5a at 704 3808 error 0
+inside seek 1323000 1 at 1323000 191348 error 0 0 cbf29ce484222325 at 1323000 191348 error 0
+inside seek 945000 1 at 945856 137676 error 0 300 d572a66f09799bc2 at 945856 137676 error 0
+inside seek 1323001 0 at 945856 137676 error 11 300 65fa0f999cedf99a at 945856 137676 error 0
+inside start 1 at 0 3634 error 0
+inside frames 1299 1323000 b506946e8e91c115 at 1323000 191348 error 0
+half info 1 44100 1024 at 0 3634 error 0
+half length 675520 4175162d at 0 3634 error 0
+half short 1323000 939043403d81ccbe at 1323000 191348 error 0
+half seek 337760 1 at 338624 51550 error 0 300 d1016bcd921f7ee8 at 338624 51550 error 0
+half seek 0 1 at 0 3634 error 0 300 5c404336d3635b5a at 704 3808 error 0
+half seek 675520 1 at 675520 99191 error 0 300 d48fefeeb77bf81a at 676544 99400 error 0
+half seek 482510 1 at 483008 71921 error 0 300 b4733f11329866f4 at 483008 71921 error 0
+half seek 675521 0 at 483008 71921 error 11 300 d11cbac7b164e290 at 484032 72068 error 0
+half start 1 at 0 3634 error 0
+half frames 1299 1323000 b506946e8e91c115 at 1323000 191348 error 0
 file mono_tiny.ogg
 info 1 44100 1024
 comments 13 1 20f814a816f6ed67
@@ -276,6 +369,37 @@ push 1 flush 0 3680 2 0 f9c4e9378a5c7a90 at 3645 889
 push 1 flush 1215 4827 0 -2 c17abd7b7ba306aa at 3642 -1
 push 1 flush 1839 3579 0 -2 dbf1d3a8eeb1b9aa at 3642 -1
 push 1 flush 3185 887 0 -2 680893b463d6944a at 3642 -1
+disk info 1 44100 1024 at 0 3419 error 0
+disk length 441 3c23d70a at 0 3419 error 0
+disk short 441 bdd0828fcd165cf0 at 889 3645 error 0
+disk seek 220 1 at 889 3645 error 0 221 6b36f5c8893e48a3 at 889 3645 error 0
+disk seek 0 1 at 0 3419 error 0 300 2669292ae4e47e52 at 889 3645 error 0
+disk seek 441 1 at 889 3645 error 0 0 cbf29ce484222325 at 889 3645 error 0
+disk seek 315 1 at 889 3645 error 0 126 7ab99c52aee62ef6 at 889 3645 error 0
+disk seek 442 0 at 889 3645 error 11 0 cbf29ce484222325 at 889 3645 error 0
+disk start 1 at 0 3419 error 0
+disk frames 2 441 f7825d2415f3861c at 889 3645 error 0
+disk whole 1 44100 441 bdd0828fcd165cf0
+inside info 1 44100 1024 at 0 3419 error 0
+inside length 441 3c23d70a at 0 3419 error 0
+inside short 441 bdd0828fcd165cf0 at 889 3645 error 0
+inside seek 220 1 at 889 3645 error 0 221 6b36f5c8893e48a3 at 889 3645 error 0
+inside seek 0 1 at 0 3419 error 0 300 2669292ae4e47e52 at 889 3645 error 0
+inside seek 441 1 at 889 3645 error 0 0 cbf29ce484222325 at 889 3645 error 0
+inside seek 315 1 at 889 3645 error 0 126 7ab99c52aee62ef6 at 889 3645 error 0
+inside seek 442 0 at 889 3645 error 11 0 cbf29ce484222325 at 889 3645 error 0
+inside start 1 at 0 3419 error 0
+inside frames 2 441 f7825d2415f3861c at 889 3645 error 0
+half info 1 44100 1024 at 0 3419 error 0
+half length 0 00000000 at 0 3419 error 36
+half short 441 bdd0828fcd165cf0 at 889 3645 error 0
+half seek 0 0 at 889 3645 error 7 0 cbf29ce484222325 at 889 3645 error 0
+half seek 0 0 at 889 3645 error 7 0 cbf29ce484222325 at 889 3645 error 0
+half seek 0 0 at 889 3645 error 7 0 cbf29ce484222325 at 889 3645 error 0
+half seek 0 0 at 889 3645 error 7 0 cbf29ce484222325 at 889 3645 error 0
+half seek 1 0 at 889 3645 error 7 0 cbf29ce484222325 at 889 3645 error 0
+half start 1 at 0 3419 error 0
+half frames 2 441 f7825d2415f3861c at 889 3645 error 0
 file six_48k_q3.ogg
 info 6 48000 1024
 comments 13 1 20f814a816f6ed67
@@ -347,6 +471,37 @@ push 1 flush 0 8593 3 0 2b827ad87b795443 at 8558 1856
 push 1 flush 5747 22907 0 -2 ee30ad132fc2947a at 17238 -1
 push 1 flush 8637 17205 0 -2 64b5112d5e9e9a74 at 17238 -1
 push 1 flush 15085 4309 0 -2 81bf66c330d84974 at 17238 -1
+disk info 6 48000 1024 at 0 7633 error 0
+disk length 24000 3f000000 at 0 7633 error 0
+disk short 24000 744d82479c706491 at 24000 17241 error 0
+disk seek 12000 1 at 12992 12829 error 0 300 9ef41776b044ee44 at 12992 12829 error 0
+disk seek 0 1 at 0 7633 error 0 300 f01c4a4375870444 at 704 8189 error 0
+disk seek 24000 1 at 24000 17241 error 0 0 cbf29ce484222325 at 24000 17241 error 0
+disk seek 17140 1 at 18112 14834 error 0 300 7a7a2f3b2a0ba594 at 18112 14834 error 0
+disk seek 24001 0 at 18112 14834 error 11 300 3c720e6660408239 at 18112 14834 error 0
+disk start 1 at 0 7633 error 0
+disk frames 27 24000 26dd5038de6c3fb8 at 24000 17241 error 0
+disk whole 6 48000 24000 744d82479c706491
+inside info 6 48000 1024 at 0 7633 error 0
+inside length 24000 3f000000 at 0 7633 error 0
+inside short 24000 744d82479c706491 at 24000 17241 error 0
+inside seek 12000 1 at 12992 12829 error 0 300 9ef41776b044ee44 at 12992 12829 error 0
+inside seek 0 1 at 0 7633 error 0 300 f01c4a4375870444 at 704 8189 error 0
+inside seek 24000 1 at 24000 17241 error 0 0 cbf29ce484222325 at 24000 17241 error 0
+inside seek 17140 1 at 18112 14834 error 0 300 7a7a2f3b2a0ba594 at 18112 14834 error 0
+inside seek 24001 0 at 18112 14834 error 11 300 3c720e6660408239 at 18112 14834 error 0
+inside start 1 at 0 7633 error 0
+inside frames 27 24000 26dd5038de6c3fb8 at 24000 17241 error 0
+half info 6 48000 1024 at 0 7633 error 0
+half length 24000 3f000000 at 0 7633 error 0
+half short 24000 744d82479c706491 at 24000 17241 error 0
+half seek 12000 1 at 12992 12829 error 0 300 9ef41776b044ee44 at 12992 12829 error 0
+half seek 0 1 at 0 7633 error 0 300 f01c4a4375870444 at 704 8189 error 0
+half seek 24000 1 at 24000 17241 error 0 0 cbf29ce484222325 at 24000 17241 error 0
+half seek 17140 1 at 18112 14834 error 0 300 7a7a2f3b2a0ba594 at 18112 14834 error 0
+half seek 24001 0 at 18112 14834 error 11 300 3c720e6660408239 at 18112 14834 error 0
+half start 1 at 0 7633 error 0
+half frames 27 24000 26dd5038de6c3fb8 at 24000 17241 error 0
 file stereo_48k_q5.ogg
 info 2 48000 1024
 comments 13 1 20f814a816f6ed67
@@ -418,6 +573,37 @@ push 1 flush 0 4902 3 0 e0df5c9f6b1d12e6 at 4867 1856
 push 1 flush 3449 13718 0 -2 f8a9149f27cce764 at 10346 -1
 push 1 flush 5191 10313 0 -2 c2a702f8d8207d54 at 10346 -1
 push 1 flush 9051 2593 0 -2 e3e23113eea79f94 at 10346 -1
+disk info 2 48000 1024 at 0 4546 error 0
+disk length 48000 3f800000 at 0 4546 error 0
+disk short 48000 6b3717050a0c99a3 at 48000 10349 error 0
+disk seek 24000 1 at 24256 7187 error 0 300 47dda9c977230636 at 25280 7295 error 0
+disk seek 0 1 at 0 4546 error 0 300 4b2b30c53c5256d1 at 704 4763 error 0
+disk seek 48000 1 at 48000 10349 error 0 0 cbf29ce484222325 at 48000 10349 error 0
+disk seek 34285 1 at 34496 8327 error 0 300 52f3e8e6d36394ca at 35520 8443 error 0
+disk seek 48001 0 at 35520 8443 error 11 300 961d9f2ddc9f98c5 at 35520 8443 error 0
+disk start 1 at 0 4546 error 0
+disk frames 49 48000 787f878e02e918d5 at 48000 10349 error 0
+disk whole 2 48000 48000 6b3717050a0c99a3
+inside info 2 48000 1024 at 0 4546 error 0
+inside length 48000 3f800000 at 0 4546 error 0
+inside short 48000 6b3717050a0c99a3 at 48000 10349 error 0
+inside seek 24000 1 at 24256 7187 error 0 300 47dda9c977230636 at 25280 7295 error 0
+inside seek 0 1 at 0 4546 error 0 300 4b2b30c53c5256d1 at 704 4763 error 0
+inside seek 48000 1 at 48000 10349 error 0 0 cbf29ce484222325 at 48000 10349 error 0
+inside seek 34285 1 at 34496 8327 error 0 300 52f3e8e6d36394ca at 35520 8443 error 0
+inside seek 48001 0 at 35520 8443 error 11 300 961d9f2ddc9f98c5 at 35520 8443 error 0
+inside start 1 at 0 4546 error 0
+inside frames 49 48000 787f878e02e918d5 at 48000 10349 error 0
+half info 2 48000 1024 at 0 4546 error 0
+half length 48000 3f800000 at 0 4546 error 0
+half short 48000 6b3717050a0c99a3 at 48000 10349 error 0
+half seek 24000 1 at 24256 7187 error 0 300 47dda9c977230636 at 25280 7295 error 0
+half seek 0 1 at 0 4546 error 0 300 4b2b30c53c5256d1 at 704 4763 error 0
+half seek 48000 1 at 48000 10349 error 0 0 cbf29ce484222325 at 48000 10349 error 0
+half seek 34285 1 at 34496 8327 error 0 300 52f3e8e6d36394ca at 35520 8443 error 0
+half seek 48001 0 at 35520 8443 error 11 300 961d9f2ddc9f98c5 at 35520 8443 error 0
+half start 1 at 0 4546 error 0
+half frames 49 48000 787f878e02e918d5 at 48000 10349 error 0
 file stereo_native.ogg
 info 2 44100 1024
 comments 13 1 540d056557f48f49
@@ -489,3 +675,34 @@ push 1 flush 0 4027 3 0 a9a5babbbcb2d81a at 3992 4096
 push 1 flush 3136 12237 0 44032 8516b508567f5ab0 at 9408 44160
 push 1 flush 4721 9343 0 -2 c823db33cae516a9 at 9405 -1
 push 1 flush 8232 2321 0 -2 37cd0e9167edce68 at 9405 -1
+disk info 2 44100 1024 at 0 3632 error 0
+disk length 44160 3f802c95 at 0 3632 error 0
+disk short 44160 e23a2a34dd32c84c at 44160 9408 error 0
+disk seek 22080 1 at 22528 6318 error 0 300 ffe2e8a5ce51be8f at 22528 6318 error 0
+disk seek 0 1 at 0 3632 error 0 300 793929d59c188933 at 1024 3751 error 0
+disk seek 44160 1 at 44160 9408 error 0 0 cbf29ce484222325 at 44160 9408 error 0
+disk seek 31540 1 at 31744 7508 error 0 300 edad01abcdd7decc at 32768 7641 error 0
+disk seek 44161 0 at 32768 7641 error 11 300 3fc8fbea0155be59 at 32768 7641 error 0
+disk start 1 at 0 3632 error 0
+disk frames 44 44160 148b02b4dccea242 at 44160 9408 error 0
+disk whole 2 44100 44160 e23a2a34dd32c84c
+inside info 2 44100 1024 at 0 3632 error 0
+inside length 44160 3f802c95 at 0 3632 error 0
+inside short 44160 e23a2a34dd32c84c at 44160 9408 error 0
+inside seek 22080 1 at 22528 6318 error 0 300 ffe2e8a5ce51be8f at 22528 6318 error 0
+inside seek 0 1 at 0 3632 error 0 300 793929d59c188933 at 1024 3751 error 0
+inside seek 44160 1 at 44160 9408 error 0 0 cbf29ce484222325 at 44160 9408 error 0
+inside seek 31540 1 at 31744 7508 error 0 300 edad01abcdd7decc at 32768 7641 error 0
+inside seek 44161 0 at 32768 7641 error 11 300 3fc8fbea0155be59 at 32768 7641 error 0
+inside start 1 at 0 3632 error 0
+inside frames 44 44160 148b02b4dccea242 at 44160 9408 error 0
+half info 2 44100 1024 at 0 3632 error 0
+half length 44032 3f7f9af2 at 0 3632 error 0
+half short 44160 e23a2a34dd32c84c at 44160 9408 error 0
+half seek 22016 1 at 22528 6318 error 0 300 1581b01b955f1eca at 22528 6318 error 0
+half seek 0 1 at 0 3632 error 0 300 793929d59c188933 at 1024 3751 error 0
+half seek 44032 1 at 44032 9171 error 0 128 273170e90e978ec1 at 44160 9408 error 0
+half seek 31450 1 at 31744 7508 error 0 300 2ec2e65c9c4a2f7e at 32768 7641 error 0
+half seek 44033 0 at 32768 7641 error 11 300 a3aaf5b98c15aa39 at 32768 7641 error 0
+half start 1 at 0 3632 error 0
+half frames 44 44160 148b02b4dccea242 at 44160 9408 error 0
