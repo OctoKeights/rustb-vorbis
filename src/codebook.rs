@@ -587,6 +587,29 @@ fn codebook_decode_start(f: &mut Io, c: &Codebook) -> i32 {
     z
 }
 
+/// The values of a codebook from `from` on, `count` of them, when they are all there.
+#[inline(always)]
+fn elements(c: &Codebook, from: i32, count: i32) -> Option<&[f32]> {
+    let from = usize::try_from(from).ok()?;
+    let count = usize::try_from(count).ok()?;
+    c.multiplicands.get(from..from.checked_add(count)?)
+}
+
+/// Two of the channel buffers at once.
+#[inline(always)]
+fn two_buffers(buffers: &mut [Vec<f32>], first: usize, second: usize) -> Option<(&mut [f32], &mut [f32])> {
+    if first < second {
+        let (low, high) = buffers.split_at_mut(second);
+        Some((low.get_mut(first)?, high.first_mut()?))
+    } else if second < first {
+        let (low, high) = buffers.split_at_mut(first);
+        let (second, first) = (low.get_mut(second)?, high.first_mut()?);
+        Some((first, second))
+    } else {
+        None
+    }
+}
+
 fn codebook_decode(f: &mut Io, c: &Codebook, output: &mut [f32], offset: i64, len: i32) -> bool {
     let z = codebook_decode_start(f, c);
     if z < 0 {
@@ -594,6 +617,18 @@ fn codebook_decode(f: &mut Io, c: &Codebook, output: &mut [f32], offset: i64, le
     }
     let len = len.min(c.dimensions);
     let z = z.wrapping_mul(c.dimensions);
+    if !c.sequence_p {
+        // The usual case, when every value and every place for it is there: the loop below
+        // without its looking each of them up.
+        let places = usize::try_from(offset).ok().and_then(|offset| output.get_mut(offset..)).unwrap_or_default();
+        if let Some(values) = elements(c, z, len).filter(|values| values.len() <= places.len()) {
+            let last = 0.0f32;
+            for (place, &value) in places.iter_mut().zip(values) {
+                *place += value + last;
+            }
+            return true;
+        }
+    }
     if c.sequence_p {
         let mut last = 0.0f32;
         for i in 0..len {
@@ -641,6 +676,15 @@ pub(crate) fn codebook_decode_deinterleave_repeat(f: &mut Io, c: &Codebook, buff
         return f.error(VorbisError::InvalidStream);
     }
 
+    // Most sound there is: two channels, both of them wanted.
+    if ch == 2 && !c.sequence_p && (c_inter == 0 || c_inter == 1) {
+        if let [Some(first), Some(second), ..] = outputs {
+            if let Some((first, second)) = two_buffers(buffers, *first, *second) {
+                return deinterleave_two(f, c, first, second, c_inter_p, p_inter_p, len, total_decode);
+            }
+        }
+    }
+
     while total_decode > 0 {
         let mut last = 0.0f32;
         let z = decode_raw(f, c);
@@ -683,6 +727,177 @@ pub(crate) fn codebook_decode_deinterleave_repeat(f: &mut Io, c: &Codebook, buff
     true
 }
 
+/// `PAIRS` pairs of values (`VALUES` of them) added to as many places of two channels.
+#[inline(always)]
+fn add_pairs<const PAIRS: usize, const VALUES: usize>(first: &mut [f32], second: &mut [f32], values: &[f32], last: f32) {
+    let (Ok(first), Ok(second), Ok(values)) = (<&mut [f32; PAIRS]>::try_from(first), <&mut [f32; PAIRS]>::try_from(second), <&[f32; VALUES]>::try_from(values)) else { return };
+    for i in 0..PAIRS {
+        first[i] += values[i * 2] + last;
+        second[i] += values[i * 2 + 1] + last;
+    }
+}
+
+/// Any number of pairs of values added to as many places of two channels.
+#[inline(always)]
+fn add_any_pairs(first: &mut [f32], second: &mut [f32], values: &[f32], last: f32) {
+    for ((first, second), pair) in first.iter_mut().zip(second).zip(values.chunks_exact(2)) {
+        *first += pair[0] + last;
+        *second += pair[1] + last;
+    }
+}
+
+/// A codeword of a codebook that doesn't have all its values, from the start of a pair on:
+/// what there is of them is added, and nothing for the rest.
+#[cold]
+fn add_values_missing(c: &Codebook, z: i32, first: &mut [f32], second: &mut [f32], at: usize, last: f32) {
+    for i in 0..c.dimensions {
+        let val = element(c, z.wrapping_add(i)) + last;
+        add(if i & 1 == 0 { &mut *first } else { &mut *second }, (at + i as usize / 2) as i64, val);
+    }
+}
+
+/// The codewords of [`deinterleave_two`] that go whole into the two channels, each value of
+/// the first channel followed by one of the second: from sample `at` on, for as long as there
+/// is room before sample `limit`. `Err` is what `deinterleave_two` is to give at once.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn whole_codewords(f: &mut Io, c: &Codebook, first: &mut [f32], second: &mut [f32], at: &mut usize, total_decode: &mut i32, limit: usize, last: f32, add_values: impl Fn(&mut [f32], &mut [f32], &[f32], f32)) -> Result<(), bool> {
+    let pairs = c.dimensions as usize / 2;
+    while *total_decode > 0 && *at + pairs <= limit {
+        let z = decode_raw(f, c);
+        if z < 0 {
+            if f.bytes_in_seg == 0 && f.last_seg {
+                return Err(false);
+            }
+            return Err(f.error(VorbisError::InvalidStream));
+        }
+        let z = z.wrapping_mul(c.dimensions);
+        *total_decode -= c.dimensions;
+        match elements(c, z, c.dimensions) {
+            Some(values) => add_values(&mut first[*at..*at + pairs], &mut second[*at..*at + pairs], values, last),
+            None => add_values_missing(c, z, first, second, *at, last),
+        }
+        *at += pairs;
+    }
+    Ok(())
+}
+
+/// [`codebook_decode_deinterleave_repeat`] for two channels, both of them wanted, and a
+/// codebook whose values don't build on each other: the same additions to the same places,
+/// with what doesn't change from one codeword to the next found once.
+#[allow(clippy::too_many_arguments)]
+fn deinterleave_two(f: &mut Io, c: &Codebook, first: &mut [f32], second: &mut [f32], c_inter_p: &mut i32, p_inter_p: &mut i32, len: i32, mut total_decode: i32) -> bool {
+    let mut c_inter = *c_inter_p;
+    let mut p_inter = *p_inter_p;
+    let mut effective = c.dimensions;
+    // (Added to each value as stb_vorbis adds it: it makes a -0.0 a 0.0.)
+    let last = 0.0f32;
+
+    // Nearly all of it: from the start of a pair, codewords of a whole number of pairs, each
+    // of which fits before `len` (so that stb_vorbis's "stop short" below has nothing to do).
+    if c_inter == 0 && c.dimensions > 0 && c.dimensions & 1 == 0 && p_inter >= 0 && len >= 0 {
+        let limit = (len as usize).min(first.len()).min(second.len());
+        let mut at = p_inter as usize;
+        let done = match c.dimensions {
+            2 => whole_codewords(f, c, first, second, &mut at, &mut total_decode, limit, last, add_pairs::<1, 2>),
+            4 => whole_codewords(f, c, first, second, &mut at, &mut total_decode, limit, last, add_pairs::<2, 4>),
+            8 => whole_codewords(f, c, first, second, &mut at, &mut total_decode, limit, last, add_pairs::<4, 8>),
+            _ => whole_codewords(f, c, first, second, &mut at, &mut total_decode, limit, last, add_any_pairs),
+        };
+        if let Err(result) = done {
+            return result;
+        }
+        p_inter = at as i32;
+    }
+
+    // The rest, a value at a time.
+    while total_decode > 0 {
+        let z = decode_raw(f, c);
+        if z < 0 {
+            if f.bytes_in_seg == 0 && f.last_seg {
+                return false;
+            }
+            return f.error(VorbisError::InvalidStream);
+        }
+
+        if c_inter + p_inter * 2 + effective > len * 2 {
+            effective = len * 2 - (p_inter * 2 - c_inter);
+        }
+
+        let z = z.wrapping_mul(c.dimensions);
+        for i in 0..effective {
+            let val = element(c, z.wrapping_add(i)) + last;
+            if c_inter == 0 {
+                add(first, i64::from(p_inter), val);
+                c_inter = 1;
+            } else {
+                add(second, i64::from(p_inter), val);
+                c_inter = 0;
+                p_inter += 1;
+            }
+        }
+        total_decode -= effective;
+    }
+    *c_inter_p = c_inter;
+    *p_inter_p = p_inter;
+    true
+}
+
+/// `COUNT` values added to as many places of a channel.
+#[inline(always)]
+fn add_run<const COUNT: usize>(places: &mut [f32], values: &[f32], last: f32) {
+    let (Ok(places), Ok(values)) = (<&mut [f32; COUNT]>::try_from(places), <&[f32; COUNT]>::try_from(values)) else { return };
+    for i in 0..COUNT {
+        places[i] += values[i] + last;
+    }
+}
+
+/// Any number of values added to as many places of a channel.
+#[inline(always)]
+fn add_any_run(places: &mut [f32], values: &[f32], last: f32) {
+    for (place, &value) in places.iter_mut().zip(values) {
+        *place += value + last;
+    }
+}
+
+/// A codeword of a codebook that doesn't have all its values: what there is of them is added,
+/// and nothing for the rest.
+#[cold]
+fn add_run_missing(c: &Codebook, z: i32, target: &mut [f32], at: usize, last: f32) {
+    for i in 0..c.dimensions {
+        add(target, (at + i as usize) as i64, element(c, z.wrapping_add(i)) + last);
+    }
+}
+
+/// The codewords of a residue of type 1 that go whole into the channel: from `offset` on,
+/// while there are `n - k` values still to come that make a whole codeword, and room for it.
+/// False is a packet that ended or a broken one, as [`codebook_decode`] gives it.
+#[inline(always)]
+fn whole_codewords_one(f: &mut Io, c: &Codebook, target: &mut [f32], offset: &mut i32, k: &mut i32, n: i32, add_values: impl Fn(&mut [f32], &[f32], f32)) -> bool {
+    let size = c.dimensions as usize;
+    // (Added to each value as stb_vorbis adds it: it makes a -0.0 a 0.0.)
+    let last = 0.0f32;
+    while n - *k >= c.dimensions && *offset as usize + size <= target.len() {
+        let z = decode_raw(f, c);
+        if z < 0 {
+            // check for EOP
+            if !(f.bytes_in_seg == 0 && f.last_seg) {
+                f.error(VorbisError::InvalidStream);
+            }
+            return false;
+        }
+        let z = z.wrapping_mul(c.dimensions);
+        let at = *offset as usize;
+        match elements(c, z, c.dimensions) {
+            Some(values) => add_values(&mut target[at..at + size], values, last),
+            None => add_run_missing(c, z, target, at, last),
+        }
+        *k += c.dimensions;
+        *offset += c.dimensions;
+    }
+    true
+}
+
 /// Residue types 0 and 1: `n` values of `target` from `offset` on.
 pub(crate) fn residue_decode(f: &mut Io, book: &Codebook, target: &mut [f32], mut offset: i32, n: i32, rtype: u16) -> bool {
     if rtype == 0 {
@@ -694,6 +909,20 @@ pub(crate) fn residue_decode(f: &mut Io, book: &Codebook, target: &mut [f32], mu
         }
     } else {
         let mut k = 0;
+        // Nearly all of it: codewords that go whole into the channel. (What is left, if
+        // anything, the loop below does as stb_vorbis does all of it.)
+        if book.lookup_type != 0 && !book.sequence_p && book.dimensions > 0 && offset >= 0 {
+            let whole = match book.dimensions {
+                1 => whole_codewords_one(f, book, target, &mut offset, &mut k, n, add_run::<1>),
+                2 => whole_codewords_one(f, book, target, &mut offset, &mut k, n, add_run::<2>),
+                4 => whole_codewords_one(f, book, target, &mut offset, &mut k, n, add_run::<4>),
+                8 => whole_codewords_one(f, book, target, &mut offset, &mut k, n, add_run::<8>),
+                _ => whole_codewords_one(f, book, target, &mut offset, &mut k, n, add_any_run),
+            };
+            if !whole {
+                return false;
+            }
+        }
         while k < n {
             if !codebook_decode(f, book, target, i64::from(offset), n - k) {
                 return false;
