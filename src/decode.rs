@@ -81,7 +81,7 @@ fn do_floor(g: &Floor1, n: usize, target: &mut [f32], final_y: &[i16]) {
 /// `residue_buffers[c]` is the channel buffer the residue's channel `c` is decoded into, or
 /// nothing if that channel is not decoded.
 #[allow(clippy::too_many_arguments)]
-fn decode_residue(f: &mut Io, codebooks: &[Codebook], r: &Residue, rtype: u16, buffers: &mut [Vec<f32>], residue_buffers: &[Option<usize>], n: usize, do_not_decode: &[bool], channels: usize) {
+fn decode_residue(f: &mut Io, codebooks: &[Codebook], r: &Residue, rtype: u16, buffers: &mut [Vec<f32>], residue_buffers: &[Option<usize>], n: usize, do_not_decode: &[bool], channels: usize, part_classdata: &mut Vec<usize>) {
     let ch = residue_buffers.len() as i32;
     let classbook = &codebooks[usize::from(r.classbook)];
     let classwords = classbook.dimensions;
@@ -91,8 +91,11 @@ fn decode_residue(f: &mut Io, codebooks: &[Codebook], r: &Residue, rtype: u16, b
     let n_read = (limit_r_end - limit_r_begin) as i32;
     let part_read = n_read / r.part_size as i32;
     let part_size = r.part_size as i32;
-    // The classification of each part, as a row of the residue's classdata.
-    let mut part_classdata = vec![vec![0usize; part_read.max(0) as usize]; channels.max(1)];
+    // The classification of each part, as a row of the residue's classdata: a row of these for
+    // each channel, one after another.
+    let row_length = part_read.max(0) as usize;
+    part_classdata.clear();
+    part_classdata.resize(row_length * channels.max(1), 0);
 
     for i in 0..ch as usize {
         if !do_not_decode[i] {
@@ -121,12 +124,12 @@ fn decode_residue(f: &mut Io, codebooks: &[Codebook], r: &Residue, rtype: u16, b
                         if q == EOP {
                             return;
                         }
-                        part_classdata[0][class_set] = q as usize;
+                        part_classdata[class_set] = q as usize;
                     }
                     let mut i = 0;
                     while i < classwords && pcount < part_read {
                         let mut z = (r.begin as i32).wrapping_add(pcount.wrapping_mul(part_size));
-                        let Some(row) = r.classdata.get(part_classdata[0][class_set]) else { return };
+                        let Some(row) = r.classdata.get(part_classdata[class_set]) else { return };
                         let c = usize::from(row[i as usize]);
                         let b = r.residue_books[c][pass];
                         if b >= 0 {
@@ -160,7 +163,7 @@ fn decode_residue(f: &mut Io, codebooks: &[Codebook], r: &Residue, rtype: u16, b
                         if temp == EOP {
                             return;
                         }
-                        part_classdata[j][class_set] = temp as usize;
+                        part_classdata[j * row_length + class_set] = temp as usize;
                     }
                 }
             }
@@ -168,7 +171,7 @@ fn decode_residue(f: &mut Io, codebooks: &[Codebook], r: &Residue, rtype: u16, b
             while i < classwords && pcount < part_read {
                 for j in 0..ch as usize {
                     if !do_not_decode[j] {
-                        let Some(row) = r.classdata.get(part_classdata[j][class_set]) else { return };
+                        let Some(row) = r.classdata.get(part_classdata[j * row_length + class_set]) else { return };
                         let c = usize::from(row[i as usize]);
                         let b = r.residue_books[c][pass];
                         if b >= 0 {
@@ -272,7 +275,7 @@ impl Vorbis<'_> {
     /// The rest of a packet. Gives the length of the data in the channel buffers and where its
     /// left edge is, or nothing if the stream is broken.
     pub(crate) fn vorbis_decode_packet_rest(&mut self, start: &PacketStart) -> Option<(i32, i32)> {
-        let Vorbis { io: f, setup, channel_buffers, final_y, mdct_scratch, .. } = self;
+        let Vorbis { io: f, setup, channel_buffers, final_y, mdct_scratch, residue_scratch, .. } = self;
         let m = setup.modes[start.mode];
         let n = setup.blocksize[usize::from(m.blockflag)];
         let map = &setup.mappings[usize::from(m.mapping)];
@@ -396,7 +399,7 @@ impl Vorbis<'_> {
                 }
             }
             let r = usize::from(map.submap_residue[usize::from(i)]);
-            decode_residue(f, &setup.codebooks, &setup.residues[r], setup.residue_types[r], channel_buffers, &residue_buffers[..ch], n2, &do_not_decode, channels);
+            decode_residue(f, &setup.codebooks, &setup.residues[r], setup.residue_types[r], channel_buffers, &residue_buffers[..ch], n2, &do_not_decode, channels, residue_scratch);
         }
 
         // INVERSE COUPLING

@@ -198,6 +198,9 @@ pub struct Vorbis<'a> {
     pub(crate) previous_length: i32,
     pub(crate) final_y: Vec<Vec<i16>>,
     pub(crate) mdct_scratch: Vec<f32>,
+    /// The classifications of the parts of the residue being decoded, a row for each channel:
+    /// kept from one packet to the next so that a packet allocates nothing.
+    pub(crate) residue_scratch: Vec<usize>,
 
     /// sample location of next frame to decode
     pub(crate) current_loc: u32,
@@ -286,6 +289,7 @@ impl<'a> Vorbis<'a> {
             previous_length: 0,
             final_y: vec![vec![0; setup.longest_floorlist.max(2)]; setup.channels],
             mdct_scratch: vec![0.0; block / 2],
+            residue_scratch: Vec::new(),
             current_loc: 0,
             current_loc_valid: false,
             discard_samples_deferred: 0,
@@ -308,6 +312,7 @@ impl<'a> Vorbis<'a> {
             previous_length: self.previous_length,
             final_y: self.final_y,
             mdct_scratch: self.mdct_scratch,
+            residue_scratch: self.residue_scratch,
             current_loc: self.current_loc,
             current_loc_valid: self.current_loc_valid,
             discard_samples_deferred: self.discard_samples_deferred,
