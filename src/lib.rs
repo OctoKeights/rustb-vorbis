@@ -18,10 +18,16 @@
 //! }
 //! ```
 //!
-//! What is here is stb_vorbis's "pull" API on a file held in memory: opening, the stream's
-//! information and comments, decoding by frame or by any number of samples as floats or
-//! 16-bit integers (with its down-mix to mono and stereo), seeking, and the stream's length.
-//! Its "push" API (feeding the decoder pieces of a file as they arrive) is not ported.
+//! Both of stb_vorbis's APIs are here:
+//!
+//! - [`Vorbis`], its "pull" API on a file held in memory: opening, the stream's information
+//!   and comments, decoding by frame or by any number of samples as floats or 16-bit integers
+//!   (with its down-mix to mono and stereo), seeking, and the stream's length.
+//! - [`VorbisPush`], its "push" API: the decoder is handed the file a piece at a time, as the
+//!   bytes arrive, and gives a frame whenever it has the whole of one.
+//!
+//! Reading from a file on disk (stb_vorbis's `FILE*` functions) is not: read the file, or
+//! hand it to [`VorbisPush`] as it is read.
 //!
 //! Like stb_vorbis, it does not decode floor 0 (found in old files, from before 2004), reads
 //! only the first logical stream of a file, and does not check page checksums while decoding.
@@ -40,6 +46,7 @@ mod codebook;
 mod decode;
 mod io;
 mod mdct;
+mod push;
 mod samples;
 mod seek;
 mod setup;
@@ -48,15 +55,17 @@ mod tables;
 use io::{Io, ProbedPage};
 use setup::Setup;
 
+pub use push::{PushFrame, VorbisPush};
+
 /// The most channels a stream may have (STB_VORBIS_MAX_CHANNELS).
 pub const MAX_CHANNELS: usize = 16;
 
 /// Why a file could not be opened, decoded or searched: stb_vorbis's STBVorbisError.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VorbisError {
-    /// Not a real error: more data is needed (push API only).
+    /// Not a real error: [`VorbisPush`] needs more of the file than it was handed.
     NeedMoreData = 1,
-    /// Can't mix the push and pull APIs.
+    /// Can't mix the push and pull APIs. (Here they are two types, so this can't happen.)
     InvalidApiMixing = 2,
     /// Not enough memory.
     OutOfMemory = 3,
@@ -200,8 +209,15 @@ impl<'a> Vorbis<'a> {
         }
         let mut io = Io::new(data);
         let setup = setup::start_decoder(&mut io, pi)?;
+        let mut vorbis = Vorbis::assemble(io, setup);
+        vorbis.vorbis_pump_first_frame();
+        Ok(vorbis)
+    }
+
+    /// The decoder for headers that have been read, with its buffers.
+    pub(crate) fn assemble(io: Io<'a>, setup: Setup) -> Vorbis<'a> {
         let block = setup.blocksize[1];
-        let mut vorbis = Vorbis {
+        Vorbis {
             io,
             p_last: ProbedPage::default(),
             total_samples: 0,
@@ -217,9 +233,28 @@ impl<'a> Vorbis<'a> {
             channel_buffer_start: 0,
             channel_buffer_end: 0,
             setup,
-        };
-        vorbis.vorbis_pump_first_frame();
-        Ok(vorbis)
+        }
+    }
+
+    /// The same decoder over other bytes (see `Io::rebind`).
+    pub(crate) fn rebind<'b>(self, data: &'b [u8]) -> Vorbis<'b> {
+        Vorbis {
+            io: self.io.rebind(data),
+            setup: self.setup,
+            p_last: self.p_last,
+            total_samples: self.total_samples,
+            channel_buffers: self.channel_buffers,
+            previous_window: self.previous_window,
+            previous_length: self.previous_length,
+            final_y: self.final_y,
+            mdct_scratch: self.mdct_scratch,
+            current_loc: self.current_loc,
+            current_loc_valid: self.current_loc_valid,
+            discard_samples_deferred: self.discard_samples_deferred,
+            samples_output: self.samples_output,
+            channel_buffer_start: self.channel_buffer_start,
+            channel_buffer_end: self.channel_buffer_end,
+        }
     }
 
     /// `stb_vorbis_get_info`

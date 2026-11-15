@@ -1,6 +1,6 @@
 //! How the decoder behaves, on the sounds in `tests/data` and on broken copies of them.
 
-use rustb_vorbis::{decode_memory, decode_memory_with_pi, Pi, Vorbis, VorbisError};
+use rustb_vorbis::{decode_memory, decode_memory_with_pi, Pi, Vorbis, VorbisError, VorbisPush};
 
 fn sound(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
@@ -189,6 +189,133 @@ fn seeking() {
     assert_eq!(&buffer[..n], &whole[..3000]);
 }
 
+/// Every channel's samples as floats, decoded from the whole file.
+fn all_floats(data: &[u8]) -> Vec<Vec<f32>> {
+    let mut vorbis = Vorbis::open(data).unwrap();
+    let mut channels = vec![Vec::new(); vorbis.info().channels];
+    // (A frame can hold no samples, as the first does; a few in a row is the end.)
+    let mut empty = 0;
+    while empty < 4 {
+        if vorbis.get_frame_float() == 0 {
+            empty += 1;
+            continue;
+        }
+        empty = 0;
+        for (channel, samples) in channels.iter_mut().enumerate() {
+            samples.extend_from_slice(vorbis.frame(channel));
+        }
+    }
+    channels
+}
+
+/// The same through the push decoder, handed `chunk` more bytes whenever it runs out.
+fn pushed_floats(data: &[u8], chunk: usize) -> Vec<Vec<f32>> {
+    let mut avail = chunk.min(data.len());
+    let (mut vorbis, mut pos) = loop {
+        match VorbisPush::open(&data[..avail]) {
+            Ok(opened) => break opened,
+            Err(VorbisError::NeedMoreData) => {
+                assert!(avail < data.len(), "the whole file is not enough");
+                avail = (avail + chunk).min(data.len());
+            }
+            Err(error) => panic!("{error}"),
+        }
+    };
+    let mut channels = vec![Vec::new(); vorbis.info().channels];
+    loop {
+        let step = vorbis.decode_frame(&data[pos..avail]);
+        if step.bytes_used == 0 {
+            // (Not enough to go on is the one thing it reports here.)
+            assert_eq!(vorbis.take_error(), Some(VorbisError::NeedMoreData));
+            if avail == data.len() {
+                break;
+            }
+            avail = (avail + chunk).min(data.len());
+            continue;
+        }
+        assert_eq!(vorbis.take_error(), None);
+        pos += step.bytes_used;
+        for (channel, samples) in channels.iter_mut().enumerate() {
+            assert_eq!(vorbis.frame(channel).len(), step.samples);
+            samples.extend_from_slice(vorbis.frame(channel));
+        }
+    }
+    assert_eq!(pos, data.len());
+    channels
+}
+
+#[test]
+fn a_file_in_pieces_gives_the_same_samples() {
+    for name in ["mono_44k_q2.ogg", "stereo_48k_q5.ogg", "six_48k_q3.ogg", "stereo_native.ogg", "mono_tiny.ogg"] {
+        let data = sound(name);
+        let whole = all_floats(&data);
+        assert!(!whole[0].is_empty());
+        for chunk in [data.len(), 4096, 700, 33, 1] {
+            if chunk == 1 && data.len() > 8000 {
+                continue; // (a byte at a time, for the small ones)
+            }
+            let pushed = pushed_floats(&data, chunk);
+            assert_eq!(pushed.len(), whole.len(), "{name} by {chunk}");
+            for (channel, (ours, theirs)) in pushed.iter().zip(&whole).enumerate() {
+                let same = ours.len() == theirs.len() && ours.iter().zip(theirs).all(|(a, b)| a.to_bits() == b.to_bits());
+                assert!(same, "{name} by {chunk}, channel {channel}");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_headers_in_pieces() {
+    let data = sound("stereo_48k_q5.ogg");
+    // Nothing, or not enough: ask again with more.
+    assert_eq!(VorbisPush::open(&[]).err(), Some(VorbisError::NeedMoreData));
+    assert_eq!(VorbisPush::open(&data[..58]).err(), Some(VorbisError::NeedMoreData));
+    assert_eq!(VorbisPush::open(&data[..2000]).err(), Some(VorbisError::NeedMoreData));
+    // Not Ogg at all: no amount will do.
+    assert_eq!(VorbisPush::open(&[0x52u8; 4000]).err(), Some(VorbisError::MissingCapturePattern));
+
+    let (vorbis, used) = VorbisPush::open(&data).unwrap();
+    let whole = Vorbis::open(&data).unwrap();
+    assert_eq!(vorbis.info(), whole.info());
+    assert_eq!(vorbis.vendor(), whole.vendor());
+    assert_eq!(vorbis.comments(), whole.comments());
+    assert_eq!(vorbis.sample_offset(), None);
+    assert!(vorbis.frame(0).is_empty());
+    // The headers end where the first page of sound starts, and that much is enough.
+    assert_eq!(&data[used..used + 4], b"OggS");
+    assert!(VorbisPush::open(&data[..used]).is_ok());
+    assert_eq!(VorbisPush::open(&data[..used - 1]).err(), Some(VorbisError::NeedMoreData));
+}
+
+#[test]
+fn finding_its_place_again() {
+    let data = sound("mono_long.ogg");
+    let whole = all_floats(&data).remove(0);
+    let (mut vorbis, _) = VorbisPush::open(&data).unwrap();
+
+    // Dropped into the middle of the file, and into the middle of a page.
+    for place in [data.len() / 2, data.len() / 5 + 3, 1000] {
+        vorbis.flush();
+        assert_eq!(vorbis.sample_offset(), None);
+        assert!(vorbis.frame(0).is_empty());
+        let mut pos = place;
+        let mut checked = 0;
+        while checked < 20 {
+            let before = vorbis.sample_offset();
+            let step = vorbis.decode_frame(&data[pos..]);
+            assert_eq!(vorbis.take_error(), None);
+            assert!(step.bytes_used > 0, "from {place}");
+            pos += step.bytes_used;
+            if step.samples > 0 {
+                // It knows where it is, and the samples are the ones that belong there.
+                let at = before.expect("a place") as usize;
+                assert_eq!(vorbis.frame(0), &whole[at..at + step.samples], "from {place}, at {at}");
+                checked += 1;
+            }
+        }
+    }
+}
+
 #[test]
 fn what_is_not_a_sound() {
     assert!(Vorbis::open(&[]).is_err());
@@ -231,6 +358,36 @@ fn exercise(data: &[u8]) {
     }
     let _ = vorbis.seek_start();
     vorbis.take_error();
+
+    // And in pieces.
+    for chunk in [data.len().max(1), 97] {
+        let mut avail = chunk.min(data.len());
+        let opened = loop {
+            match VorbisPush::open(&data[..avail]) {
+                Err(VorbisError::NeedMoreData) if avail < data.len() => avail = (avail + chunk).min(data.len()),
+                other => break other,
+            }
+        };
+        let Ok((mut vorbis, mut pos)) = opened else { continue };
+        let mut steps = 0;
+        while steps < 20000 && pos <= avail {
+            steps += 1;
+            if steps == 40 {
+                vorbis.flush();
+            }
+            let step = vorbis.decode_frame(&data[pos..avail]);
+            for channel in 0..info.channels {
+                assert!(vorbis.frame(channel).len() <= info.max_frame_size * 2);
+            }
+            if step.bytes_used == 0 {
+                if avail == data.len() {
+                    break;
+                }
+                avail = (avail + chunk).min(data.len());
+            }
+            pos += step.bytes_used;
+        }
+    }
 }
 
 #[test]

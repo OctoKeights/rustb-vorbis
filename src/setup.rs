@@ -419,6 +419,14 @@ pub(crate) fn start_decoder(f: &mut Io, pi: Pi) -> Result<Setup, VorbisError> {
         return Err(f.error.unwrap_or(VorbisError::UnexpectedEof));
     }
 
+    if f.push_mode && !f.is_whole_packet_present(0) {
+        // convert error in ogg header to write type
+        if f.error == Some(VorbisError::InvalidStream) {
+            f.error = Some(VorbisError::InvalidSetup);
+        }
+        return Err(f.error.unwrap_or(VorbisError::InvalidSetup));
+    }
+
     if f.get8_packet() != VORBIS_PACKET_SETUP {
         return Err(VorbisError::InvalidSetup);
     }

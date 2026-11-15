@@ -5,6 +5,9 @@ use crate::VorbisError;
 /// "No more bits in this packet" (stb_vorbis's EOP and INVALID_BITS).
 pub(crate) const EOP: i32 = -1;
 
+/// "OggS": what every Ogg page starts with.
+pub(crate) const OGG_PAGE_HEADER: [u8; 4] = [0x4f, 0x67, 0x67, 0x53];
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ProbedPage {
     pub page_start: u32,
@@ -14,11 +17,14 @@ pub(crate) struct ProbedPage {
 
 /// Everything about where the decoder is in the file.
 pub(crate) struct Io<'a> {
+    /// The whole file, or in push mode the bytes the caller handed over this time.
     pub data: &'a [u8],
     /// Offset of the next byte. A skip may put it past the end.
     pub pos: usize,
     pub eof: bool,
     pub error: Option<VorbisError>,
+    /// The decoder is given the file a piece at a time (stb_vorbis's push_mode).
+    pub push_mode: bool,
 
     pub p_first: ProbedPage,
     pub first_decode: bool,
@@ -49,6 +55,7 @@ impl<'a> Io<'a> {
             pos: 0,
             eof: false,
             error: None,
+            push_mode: false,
             p_first: ProbedPage::default(),
             first_decode: false,
             last_page: 0,
@@ -122,6 +129,9 @@ impl<'a> Io<'a> {
     }
 
     pub fn set_file_offset(&mut self, loc: u32) -> bool {
+        if self.push_mode {
+            return false;
+        }
         self.eof = false;
         if loc as usize >= self.data.len() {
             self.pos = self.data.len();
@@ -134,7 +144,119 @@ impl<'a> Io<'a> {
     }
 
     pub fn file_offset(&self) -> u32 {
+        if self.push_mode {
+            return 0;
+        }
         self.pos as u32
+    }
+
+    /// The same state over other bytes: push mode's `f->stream = data` at each call, which in
+    /// Rust is another lifetime and so another value.
+    pub fn rebind<'b>(self, data: &'b [u8]) -> Io<'b> {
+        Io {
+            data,
+            pos: self.pos,
+            eof: self.eof,
+            error: self.error,
+            push_mode: self.push_mode,
+            p_first: self.p_first,
+            first_decode: self.first_decode,
+            last_page: self.last_page,
+            segment_count: self.segment_count,
+            segments: self.segments,
+            page_flag: self.page_flag,
+            next_seg: self.next_seg,
+            last_seg: self.last_seg,
+            last_seg_which: self.last_seg_which,
+            end_seg_with_known_loc: self.end_seg_with_known_loc,
+            known_loc_for_packet: self.known_loc_for_packet,
+            bytes_in_seg: self.bytes_in_seg,
+            acc: self.acc,
+            valid_bits: self.valid_bits,
+            packet_bytes: self.packet_bytes,
+        }
+    }
+
+    /// Push mode: whether the bytes at hand hold the whole of the next packet
+    /// (is_whole_packet_present). `previous_length`: the decoder's, 0 when it is resynching.
+    pub fn is_whole_packet_present(&mut self, previous_length: i32) -> bool {
+        // make sure that we have the packet available before continuing...
+        // this requires a full ogg parse, but we know we can fetch from f->stream
+
+        // instead of coding this out explicitly, we could save the current read state,
+        // read the next packet with get8() until end-of-packet, check f->eof, then
+        // reset the state? but that would be slower, esp. since we'd have over 256 bytes
+        // of state to restore (primarily the page segment table)
+
+        let end = self.data.len();
+        let mut s = self.next_seg;
+        let mut first = true;
+        let mut p = self.pos;
+        if s != -1 {
+            // if we're not at the start of a page
+            while s < self.segment_count {
+                let segment = self.segments.get(s as usize).copied().unwrap_or(0);
+                p += usize::from(segment);
+                if segment < 255 {
+                    break;
+                }
+                s += 1;
+            }
+            // either this continues, or it ends it...
+            if s == self.segment_count {
+                s = -1; // set 'crosses page' flag
+            }
+            if p > end {
+                return self.error(VorbisError::NeedMoreData);
+            }
+            first = false;
+        }
+        while s == -1 {
+            // check that we have the page header ready
+            if p + 26 >= end {
+                return self.error(VorbisError::NeedMoreData);
+            }
+            // validate the page
+            if self.data[p..p + 4] != OGG_PAGE_HEADER {
+                return self.error(VorbisError::InvalidStream);
+            }
+            if self.data[p + 4] != 0 {
+                return self.error(VorbisError::InvalidStream);
+            }
+            if first {
+                // the first segment must NOT have 'continued_packet', later ones MUST
+                if previous_length != 0 && self.data[p + 5] & 1 != 0 {
+                    return self.error(VorbisError::InvalidStream);
+                }
+                // if no previous length, we're resynching, so we can come in on a continued-packet,
+                // which we'll just drop
+            } else if self.data[p + 5] & 1 == 0 {
+                return self.error(VorbisError::InvalidStream);
+            }
+            let n = usize::from(self.data[p + 26]); // segment counts
+            let q = p + 27; // q points to segment table
+            p = q + n; // advance past header
+            // make sure we've read the segment table
+            if p > end {
+                return self.error(VorbisError::NeedMoreData);
+            }
+            let mut ended = false;
+            for k in 0..n {
+                p += usize::from(self.data[q + k]);
+                if self.data[q + k] < 255 {
+                    ended = true;
+                    break;
+                }
+            }
+            if ended {
+                s = 0;
+            }
+            if p > end {
+                return self.error(VorbisError::NeedMoreData);
+            }
+            first = false;
+        }
+        true
     }
 
     fn capture_pattern(&mut self) -> bool {
@@ -142,7 +264,7 @@ impl<'a> Io<'a> {
     }
 
     pub fn start_page_no_capturepattern(&mut self) -> bool {
-        if self.first_decode {
+        if self.first_decode && !self.push_mode {
             self.p_first.page_start = self.file_offset().wrapping_sub(4);
         }
         // stream structure version

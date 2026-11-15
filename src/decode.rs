@@ -6,7 +6,7 @@ use crate::io::{Io, EOP};
 use crate::mdct::inverse_mdct;
 use crate::setup::{Floor1, Residue};
 use crate::tables::INVERSE_DB_TABLE;
-use crate::Vorbis;
+use crate::{Vorbis, VorbisError};
 
 fn predict_point(x: i32, x0: i32, x1: i32, y0: i32, y1: i32) -> i32 {
     let dy = y1 - y0;
@@ -230,6 +230,10 @@ impl Vorbis<'_> {
             }
             // check packet type
             if f.get_bits(1) != 0 {
+                if f.push_mode {
+                    f.error(VorbisError::BadPacketType);
+                    return None;
+                }
                 // (A header packet in the audio: skipped.)
                 while f.get8_packet() != EOP {}
                 continue;

@@ -3,7 +3,7 @@
 
 use crate::codebook::ilog;
 use crate::decode::PacketStart;
-use crate::io::ProbedPage;
+use crate::io::{ProbedPage, OGG_PAGE_HEADER};
 use crate::{Vorbis, VorbisError};
 
 const CRC32_POLY: u32 = 0x04c1_1db7; // from spec
@@ -27,11 +27,9 @@ const fn crc32_init() -> [u32; 256] {
 }
 
 #[inline]
-fn crc32_update(crc: u32, byte: u8) -> u32 {
+pub(crate) fn crc32_update(crc: u32, byte: u8) -> u32 {
     (crc << 8) ^ CRC_TABLE[usize::from(byte) ^ (crc >> 24) as usize]
 }
-
-const OGG_PAGE_HEADER: [u8; 4] = [0x4f, 0x67, 0x67, 0x53];
 
 /// What `vorbis_find_page` found: where the page ends and whether it is the stream's last.
 struct FoundPage {
